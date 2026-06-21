@@ -1,0 +1,15 @@
+[package]
+name = "gta7"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+raylib = "6.0"
+rand = "0.8"
+rand_chacha = "0.3"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
