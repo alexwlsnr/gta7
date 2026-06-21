@@ -225,6 +225,13 @@ impl<'a> Game<'a> {
             if crashed {
                 self.sfx.crash.play();
             }
+            // Spawn drift smoke/skid particles when handbraking at speed
+            if input.handbrake && self.vehicles[vi].speed.abs() > 4.0 {
+                let car = &self.vehicles[vi];
+                let fwd = dir_from_yaw(car.yaw);
+                let rear_pos = vsub(car.pos, vscale(fwd, 1.3));
+                self.fx.burst(rear_pos, 2, 1.2, Color::new(200, 200, 202, 130), 0.4, 0.2);
+            }
             // Player position follows vehicle.
             self.player.pos = self.vehicles[vi].pos;
             self.player.yaw = self.vehicles[vi].yaw;
@@ -328,7 +335,7 @@ impl<'a> Game<'a> {
         let cops_shoot = self.wanted.cops_shoot();
         let player_pos = self.player.pos;
         for cop in self.cops.iter_mut() {
-            let fired = cop.update(dt, player_pos, cops_shoot);
+            let fired = cop.update(dt, &self.city, player_pos, cops_shoot);
             if fired {
                 cop_fire(cop.pos, player_pos, &mut self.player, &mut self.fx);
             }
@@ -378,6 +385,121 @@ impl<'a> Game<'a> {
         // --- Traffic ---
         for tc in self.traffic.iter_mut() {
             tc.update(&self.city, &mut self.vehicles, player_pos, dt);
+        }
+
+        // --- Car-vs-Car Collisions ---
+        let num_vehicles = self.vehicles.len();
+        for i in 0..num_vehicles {
+            for j in (i + 1)..num_vehicles {
+                if self.vehicles[i].destroyed || self.vehicles[j].destroyed {
+                    continue;
+                }
+                let dist = vdist_xz(self.vehicles[i].pos, self.vehicles[j].pos);
+                let col_dist = 2.5; // combined vehicle radii
+                if dist < col_dist && dist > 0.05 {
+                    let normal = vnorm_xz(vsub(self.vehicles[i].pos, self.vehicles[j].pos));
+                    let overlap = col_dist - dist;
+                    // Push vehicles apart
+                    self.vehicles[i].pos.x += normal.x * overlap * 0.5;
+                    self.vehicles[i].pos.z += normal.z * overlap * 0.5;
+                    self.vehicles[j].pos.x -= normal.x * overlap * 0.5;
+                    self.vehicles[j].pos.z -= normal.z * overlap * 0.5;
+
+                    // Elastic impulse collision resolution
+                    let rel_vel = vsub(self.vehicles[i].vel, self.vehicles[j].vel);
+                    let impulse = vdot(rel_vel, normal);
+                    if impulse < 0.0 {
+                        let bounce = 0.35;
+                        let impulse_vec = vscale(normal, impulse * 0.5 * (1.0 + bounce));
+                        self.vehicles[i].vel = vsub(self.vehicles[i].vel, impulse_vec);
+                        self.vehicles[j].vel = vadd(self.vehicles[j].vel, impulse_vec);
+
+                        // Take damage from high impact speed
+                        let impact = impulse.abs();
+                        if impact > 4.0 {
+                            self.vehicles[i].take_damage(impact * 0.5);
+                            self.vehicles[j].take_damage(impact * 0.5);
+                            if self.vehicles[i].occupied || self.vehicles[j].occupied {
+                                self.sfx.crash.play();
+                            }
+                            // Spawn sparks at contact midpoint
+                            let mid = vscale(vadd(self.vehicles[i].pos, self.vehicles[j].pos), 0.5);
+                            self.fx.burst(mid, 8, 4.0, Color::new(255, 200, 80, 255), 0.25, 6.0);
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Car-vs-Ped & Car-vs-Cop Collisions ---
+        let mut hit_sound = false;
+        for v in self.vehicles.iter_mut() {
+            if v.destroyed { continue; }
+            let v_speed = v.speed.abs();
+
+            // Player on foot vs car
+            if self.player.in_vehicle.is_none() && self.player.alive {
+                let d = vdist_xz(v.pos, self.player.pos);
+                let col_dist = 1.7; // car radius 1.3 + player 0.4
+                if d < col_dist && d > 0.05 {
+                    let normal = vnorm_xz(vsub(self.player.pos, v.pos));
+                    let overlap = col_dist - d;
+                    self.player.pos.x += normal.x * overlap;
+                    self.player.pos.z += normal.z * overlap;
+
+                    if v_speed > 4.0 {
+                        self.player.take_damage(v_speed * 1.5);
+                        self.player.vel = vadd(self.player.vel, vscale(normal, v_speed * 0.8));
+                        hit_sound = true;
+                        self.fx.blood(self.player.pos);
+                    }
+                }
+            }
+
+            // Peds vs car
+            for ped in self.peds.iter_mut() {
+                if ped.dead() { continue; }
+                let d = vdist_xz(v.pos, ped.pos);
+                let col_dist = 1.7;
+                if d < col_dist && d > 0.05 {
+                    let normal = vnorm_xz(vsub(ped.pos, v.pos));
+                    let overlap = col_dist - d;
+                    ped.pos.x += normal.x * overlap;
+                    ped.pos.z += normal.z * overlap;
+
+                    if v_speed > 4.0 {
+                        ped.take_damage(v_speed * 2.0);
+                        ped.vel = vscale(normal, v_speed * 0.9 + 2.0); // Throw ped!
+                        self.fx.blood(ped.pos);
+                        hit_sound = true;
+                        self.wanted.add_heat(0.3); // crimes get heat
+                    }
+                }
+            }
+
+            // Cops vs car
+            for cop in self.cops.iter_mut() {
+                if cop.dead() { continue; }
+                let d = vdist_xz(v.pos, cop.pos);
+                let col_dist = 1.7;
+                if d < col_dist && d > 0.05 {
+                    let normal = vnorm_xz(vsub(cop.pos, v.pos));
+                    let overlap = col_dist - d;
+                    cop.pos.x += normal.x * overlap;
+                    cop.pos.z += normal.z * overlap;
+
+                    if v_speed > 4.0 {
+                        cop.take_damage(v_speed * 2.0);
+                        cop.vel = vscale(normal, v_speed * 0.9 + 2.0); // Throw cop!
+                        self.fx.blood(cop.pos);
+                        hit_sound = true;
+                        self.wanted.add_heat(1.0); // Hitting cops is severe
+                    }
+                }
+            }
+        }
+        if hit_sound {
+            self.sfx.crash.play();
         }
 
         // --- Vehicle explosions ---

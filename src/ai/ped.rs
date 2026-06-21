@@ -12,6 +12,7 @@ use raylib::color::Color;
 pub struct Ped {
     pub pos: Vector3,
     pub prev_pos: Vector3,
+    pub vel: Vector3,
     pub yaw: f32,
     pub prev_yaw: f32,
     pub health: f32,
@@ -53,6 +54,7 @@ impl Ped {
         Ped {
             pos,
             prev_pos: pos,
+            vel: Vector3 { x: 0.0, y: 0.0, z: 0.0 },
             yaw: rand::random::<f32>() * std::f32::consts::TAU,
             prev_yaw: 0.0,
             health: 35.0,
@@ -86,6 +88,11 @@ impl Ped {
         self.prev_yaw = self.yaw;
         if self.state == PedState::Dead {
             self.dead_timer -= dt;
+            self.pos = vadd(self.pos, vscale(self.vel, dt));
+            self.vel = vscale(self.vel, 1.0 - 5.0 * dt);
+            let push = city.resolve_circle(self.pos.x, self.pos.z, 0.4);
+            self.pos.x += push.x;
+            self.pos.z += push.z;
             return;
         }
         match self.state {

@@ -59,61 +59,89 @@ impl Vehicle {
         if self.destroyed {
             return false;
         }
-        // Throttle: W=forward, S=reverse/brake
+
+        let fwd = dir_from_yaw(self.yaw);
+        let right = Vector3 { x: -fwd.z, y: 0.0, z: fwd.x };
+
+        // 1. Project current velocity to get forward and lateral speeds
+        let mut fwd_speed = vdot(self.vel, fwd);
+        let mut lat_speed = vdot(self.vel, right);
+
+        // 2. Accelerate / brake along forward direction
         let throttle = input.move_y;
-        let max_fwd = 28.0;
-        let max_rev = -10.0;
-        let accel = 30.0;
+        let accel = 35.0;
+        let max_fwd = 30.0;
+        let max_rev = -12.0;
+
         if throttle > 0.0 {
-            self.speed += accel * throttle * dt;
+            fwd_speed += accel * throttle * dt;
         } else if throttle < 0.0 {
-            if self.speed > 0.0 {
-                self.speed += -50.0 * dt; // brake
+            if fwd_speed > 0.1 {
+                fwd_speed += -55.0 * dt; // strong brake
             } else {
-                self.speed += accel * throttle * dt; // reverse
+                fwd_speed += accel * throttle * dt; // reverse
             }
         } else {
-            // Engine drag
-            self.speed *= 1.0 - 1.5 * dt;
-            if self.speed.abs() < 0.3 {
-                self.speed = 0.0;
-            }
+            fwd_speed *= 1.0 - 1.2 * dt; // engine drag
         }
-        self.speed = clamp(self.speed, max_rev, max_fwd);
+        fwd_speed = clamp(fwd_speed, max_rev, max_fwd);
 
-        // Steering: proportional to speed, reduced at very low speed.
-        let steer_input = -input.move_x; // A=left (+steer)
-        let speed_factor = clamp(self.speed.abs() / 10.0, 0.0, 1.0);
-        let steer_rate = 2.2 * speed_factor;
+        // 3. Steering: turn rate based on speed
+        let steer_input = -input.move_x; // A=left, D=right
         self.steer = approach(self.steer, steer_input, 4.0 * dt);
-        let turn = self.steer * steer_rate * (if self.speed >= 0.0 { 1.0 } else { -1.0 });
+        
+        let is_moving = fwd_speed.abs() > 0.5;
+        let speed_ratio = fwd_speed.abs() / max_fwd;
+        let turn_speed = if is_moving {
+            let base_turn = 2.4 * clamp(speed_ratio * 2.0, 0.15, 1.0);
+            if input.handbrake {
+                base_turn * 1.6 // sharper turn when handbraking
+            } else {
+                base_turn
+            }
+        } else {
+            0.0
+        };
+        let turn = self.steer * turn_speed * (if fwd_speed >= 0.0 { 1.0 } else { -1.0 });
         self.yaw += turn * dt;
 
-        // Handbrake: kill speed faster, allow sharper turn.
+        // 4. Grip and Lateral slip (Drift!)
+        let grip = if input.handbrake {
+            1.8 // low lateral grip -> slide/drift!
+        } else {
+            7.5 // high grip -> align velocity to wheels
+        };
+        lat_speed = approach(lat_speed, 0.0, grip * dt * 10.0);
+
         if input.handbrake {
-            self.speed *= 1.0 - 3.0 * dt;
+            fwd_speed *= 1.0 - 1.2 * dt;
         }
 
-        // Integrate position.
-        let fwd = dir_from_yaw(self.yaw);
-        self.pos = vadd(self.pos, vscale(fwd, self.speed * dt));
+        // 5. Reconstruct 3D velocity
+        let target_vel = vadd(vscale(fwd, fwd_speed), vscale(right, lat_speed));
+        self.vel = target_vel;
+        self.speed = fwd_speed;
+
+        // 6. Integrate position
+        self.pos = vadd(self.pos, vscale(self.vel, dt));
 
         // World bounds.
         let lim = cfg.world_half() - 3.0;
         self.pos.x = clamp(self.pos.x, -lim, lim);
         self.pos.z = clamp(self.pos.z, -lim, lim);
 
-        // Building collision (radius ~ car half-width).
+        // 7. Building collision
         let mut crashed = false;
         let push = city.resolve_circle(self.pos.x, self.pos.z, 1.5);
         if vlen_xz(push) > 0.01 {
             self.pos.x += push.x;
             self.pos.z += push.z;
-            // Crash damage proportional to speed.
-            let impact = self.speed.abs() * 0.15;
+            
+            let impact = vlen_xz(self.vel);
             if impact > 5.0 {
-                self.take_damage(impact * 0.5);
-                self.speed *= 0.3;
+                self.take_damage(impact * 0.4);
+                self.vel = vscale(self.vel, -0.2); // bounce slightly backward
+                self.speed *= -0.2;
                 crashed = true;
             }
         }
@@ -128,7 +156,8 @@ impl Vehicle {
         self.speed = approach(self.speed, target_speed, 15.0 * dt);
         self.yaw = lerp_angle(self.yaw, target_yaw, 3.0 * dt);
         let fwd = dir_from_yaw(self.yaw);
-        self.pos = vadd(self.pos, vscale(fwd, self.speed * dt));
+        self.vel = vscale(fwd, self.speed);
+        self.pos = vadd(self.pos, vscale(self.vel, dt));
         let lim = cfg.world_half() - 3.0;
         self.pos.x = clamp(self.pos.x, -lim, lim);
         self.pos.z = clamp(self.pos.z, -lim, lim);
@@ -212,7 +241,7 @@ mod tests {
             raylib::color::Color::RED,
             VehicleKind::Civilian,
         );
-        v.speed = 20.0;
+        v.vel = Vector3 { x: 0.0, y: 0.0, z: 20.0 };
         let mut input = Input::default();
         input.move_x = 1.0; // D=right -> steer left (negative steer_input=-move_x)
         v.update_driven(&input, &city, &cfg, 0.1);

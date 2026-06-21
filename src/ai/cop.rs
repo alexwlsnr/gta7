@@ -8,13 +8,14 @@ pub enum CopState { Chase, Shoot, Dead }
 pub struct Cop {
     pub pos: Vector3,
     pub prev_pos: Vector3,
+    pub vel: Vector3,
     pub yaw: f32,
     pub prev_yaw: f32,
     pub health: f32,
     pub state: CopState,
     pub dead_timer: f32,
     pub fire_cooldown: f32,
-    pub in_car: Option<usize>, // index into vehicles if in a police car
+    pub in_car: Option<usize>,
 }
 
 impl Cop {
@@ -22,6 +23,7 @@ impl Cop {
         Cop {
             pos,
             prev_pos: pos,
+            vel: Vector3 { x: 0.0, y: 0.0, z: 0.0 },
             yaw: 0.0,
             prev_yaw: 0.0,
             health: 60.0,
@@ -42,12 +44,17 @@ impl Cop {
     }
 
     /// `player_pos` = where the player is. `can_shoot` = wanted >= 2.
-    /// Returns true if the cop fires this tick (caller applies damage).
-    pub fn update(&mut self, dt: f32, player_pos: Vector3, can_shoot: bool) -> bool {
+    /// Returns true if the cop fires this tick.
+    pub fn update(&mut self, dt: f32, city: &crate::world::city::City, player_pos: Vector3, can_shoot: bool) -> bool {
         self.prev_pos = self.pos;
         self.prev_yaw = self.yaw;
         if self.state == CopState::Dead {
             self.dead_timer -= dt;
+            self.pos = vadd(self.pos, vscale(self.vel, dt));
+            self.vel = vscale(self.vel, 1.0 - 5.0 * dt);
+            let push = city.resolve_circle(self.pos.x, self.pos.z, 0.4);
+            self.pos.x += push.x;
+            self.pos.z += push.z;
             return false;
         }
         let to_player = vsub(player_pos, self.pos);
