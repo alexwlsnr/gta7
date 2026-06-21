@@ -7,3 +7,8 @@ pub mod render;
 pub mod player;
 pub mod vehicle;
 pub mod camera;
+pub mod combat;
+pub mod wanted;
+pub mod ai;
+pub mod pickup;
+pub mod mission;
