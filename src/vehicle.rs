@@ -55,9 +55,9 @@ impl Vehicle {
     }
 
     /// Player-driven update.
-    pub fn update_driven(&mut self, input: &Input, city: &City, cfg: &Config, dt: f32) {
+    pub fn update_driven(&mut self, input: &Input, city: &City, cfg: &Config, dt: f32) -> bool {
         if self.destroyed {
-            return;
+            return false;
         }
         // Throttle: W=forward, S=reverse/brake
         let throttle = input.move_y;
@@ -104,6 +104,7 @@ impl Vehicle {
         self.pos.z = clamp(self.pos.z, -lim, lim);
 
         // Building collision (radius ~ car half-width).
+        let mut crashed = false;
         let push = city.resolve_circle(self.pos.x, self.pos.z, 1.5);
         if vlen_xz(push) > 0.01 {
             self.pos.x += push.x;
@@ -113,8 +114,10 @@ impl Vehicle {
             if impact > 5.0 {
                 self.take_damage(impact * 0.5);
                 self.speed *= 0.3;
+                crashed = true;
             }
         }
+        crashed
     }
 
     /// AI-driven update (traffic / police car). Uses a target velocity + yaw.

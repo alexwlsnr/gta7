@@ -20,7 +20,7 @@ use crate::render::models::{Assets, draw_world, draw_car, draw_character, draw_p
 use crate::render::fx::Fx;
 use crate::hud;
 
-pub struct Game {
+pub struct Game<'a> {
     pub cfg: Config,
     pub city: City,
     pub assets: Assets,
@@ -36,16 +36,18 @@ pub struct Game {
     pub fx: Fx,
     pub camera: FollowCamera,
     pub time: f32,
-    pub panic_pos: Option<Vector3>, // last gunfire position (for ped panic)
-    pub mission_target_idx: Option<usize>, // index into peds for kill mission
-    pub look_accum_x: f32, // accumulated mouse deltas (survive frames with no logic step)
+    pub panic_pos: Option<Vector3>,
+    pub mission_target_idx: Option<usize>,
+    pub look_accum_x: f32,
     pub look_accum_y: f32,
+    pub sfx: crate::sound::SoundEffects<'a>,
 }
 
-impl Game {
-    pub fn new(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: Config) -> Self {
+impl<'a> Game<'a> {
+    pub fn new(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: Config, audio: &'a RaylibAudio) -> Self {
         let city = City::generate(&cfg);
         let assets = Assets::load(rl, thread, &cfg);
+        let sfx = crate::sound::SoundEffects::load(audio);
 
         // Player at center on a road.
         let player_pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
@@ -144,6 +146,7 @@ impl Game {
             mission_target_idx: None,
             look_accum_x: 0.0,
             look_accum_y: 0.0,
+            sfx,
         }
     }
 
@@ -180,6 +183,7 @@ impl Game {
                 self.player.pos = vadd(car.pos, vscale(right, 2.5));
                 self.player.pos.y = 0.0;
                 self.player.vel = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                self.sfx.enter_exit.play();
             } else {
                 // Try to enter nearest vehicle within range.
                 let mut best: Option<(usize, f32)> = None;
@@ -195,6 +199,7 @@ impl Game {
                 if let Some((vi, _)) = best {
                     self.player.in_vehicle = Some(vi);
                     self.vehicles[vi].occupied = true;
+                    self.sfx.enter_exit.play();
                 }
             }
         }
@@ -216,7 +221,10 @@ impl Game {
         self.look_accum_x = 0.0;
         self.look_accum_y = 0.0;
         if let Some(vi) = self.player.in_vehicle {
-            self.vehicles[vi].update_driven(input, &self.city, &self.cfg, dt);
+            let crashed = self.vehicles[vi].update_driven(input, &self.city, &self.cfg, dt);
+            if crashed {
+                self.sfx.crash.play();
+            }
             // Player position follows vehicle.
             self.player.pos = self.vehicles[vi].pos;
             self.player.yaw = self.vehicles[vi].yaw;
@@ -246,6 +254,7 @@ impl Game {
             self.player.fire_cooldown = weapon.fire_rate();
             self.player.ammo -= 1;
             self.player.recoil = 0.15;
+            self.sfx.shoot.play();
             if self.player.ammo == 0 {
                 self.player.start_reload();
             }
@@ -380,6 +389,7 @@ impl Game {
             }
         }
         for ex in &explosions {
+            self.sfx.explosion.play();
             self.fx.explosion(*ex);
             // Damage nearby entities.
             for ped in self.peds.iter_mut() {
@@ -438,6 +448,7 @@ impl Game {
         let (reward, spawn_target) = self.mission.update(dt, player_pos, target_alive, in_vehicle);
         if reward > 0 {
             self.player.money += reward;
+            self.sfx.complete.play();
             // Start next mission after a delay.
             self.mission.start_new(player_pos, self.cfg.world_half());
             self.mission_target_idx = None;

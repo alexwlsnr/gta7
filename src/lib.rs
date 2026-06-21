@@ -14,3 +14,4 @@ pub mod pickup;
 pub mod mission;
 pub mod hud;
 pub mod game;
+pub mod sound;

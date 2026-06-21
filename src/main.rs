@@ -12,7 +12,10 @@ fn main() {
     rl.set_target_fps(cfg.logic_rate.hz() as u32);
     rl.disable_cursor();
 
-    let mut game = Game::new(&mut rl, &thread, cfg);
+    // Initialize audio device for retro sound effects.
+    let audio = raylib::prelude::RaylibAudio::init_audio_device().unwrap();
+
+    let mut game = Game::new(&mut rl, &thread, cfg, &audio);
     let mut clock = Clock::new(game.cfg.logic_rate);
 
     while !rl.window_should_close() {
