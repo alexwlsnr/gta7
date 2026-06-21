@@ -478,7 +478,10 @@ impl Game {
         let debug = self.cfg.debug_overlay;
 
         let mut d = rl.begin_drawing(thread);
-        // Sky gradient (top-to-bottom).
+        // Clear color + depth buffer (depth clear is essential — without it 3D
+        // geometry fails the depth test against stale values and renders nothing).
+        d.clear_background(self.assets.sky_bottom);
+        // Sky gradient (top-to-bottom) drawn over the cleared color buffer.
         let sh = d.get_screen_height();
         let sky_top = self.assets.sky_top;
         let sky_bottom = self.assets.sky_bottom;
