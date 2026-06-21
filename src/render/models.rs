@@ -1,15 +1,19 @@
 //! Procedural textures and cached models/meshes. All assets generated in code.
 use raylib::prelude::*;
 use raylib::ffi::Vector3;
+use raylib::consts::MaterialMapIndex;
 
 use crate::config::Config;
 use crate::world::city::{Building, City, Axis};
 
-/// Cached GPU assets built once at startup.
+/// Cached GPU assets built once at startup. Textures are kept as fields because
+/// the `Model`s hold raw pointers to them — they must outlive the models.
 pub struct Assets {
-    pub road_tex: Texture2D,
+    pub building_model: Model,   // unit cube with window texture
     pub window_tex: Texture2D,
+    pub ground_model: Model,     // large plane with ground texture
     pub ground_tex: Texture2D,
+    pub road_tex: Texture2D,     // for HUD minimap
     pub sky_top: Color,
     pub sky_bottom: Color,
 }
@@ -17,21 +21,8 @@ pub struct Assets {
 impl Assets {
     pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: &Config) -> Self {
         let p = cfg.palette();
-        // Road texture: dark asphalt with a dashed center line.
-        let mut road = Image::gen_image_color(64, 64, p.road());
-        // Center dashed yellow line.
-        let yellow = Color::new(210, 180, 60, 255);
-        for y in (0..64).step_by(16) {
-            for x in 28..36 {
-                road.draw_pixel(x, y, yellow);
-                road.draw_pixel(x, y + 1, yellow);
-                road.draw_pixel(x, y + 2, yellow);
-                road.draw_pixel(x, y + 3, yellow);
-            }
-        }
-        let road_tex = rl.load_texture_from_image(thread, &road).unwrap();
 
-        // Window texture: building facade grid of windows.
+        // --- Window facade texture ---
         let mut win = Image::gen_image_color(64, 64, Color::new(40, 50, 70, 255));
         let lit = Color::new(255, 230, 150, 255);
         let dark = Color::new(20, 25, 40, 255);
@@ -49,7 +40,7 @@ impl Assets {
         }
         let window_tex = rl.load_texture_from_image(thread, &win).unwrap();
 
-        // Ground texture: mottled grey-green for non-road ground (sidewalk/grass blend).
+        // --- Ground texture ---
         let mut ground = Image::gen_image_color(128, 128, p.sidewalk());
         let grass = p.grass();
         for _ in 0..400 {
@@ -59,10 +50,42 @@ impl Assets {
         }
         let ground_tex = rl.load_texture_from_image(thread, &ground).unwrap();
 
+        // --- Road texture (for minimap) ---
+        let mut road = Image::gen_image_color(64, 64, p.road());
+        let yellow = Color::new(210, 180, 60, 255);
+        for y in (0..64).step_by(16) {
+            for x in 28..36 {
+                road.draw_pixel(x, y, yellow);
+                road.draw_pixel(x, y + 1, yellow);
+                road.draw_pixel(x, y + 2, yellow);
+                road.draw_pixel(x, y + 3, yellow);
+            }
+        }
+        let road_tex = rl.load_texture_from_image(thread, &road).unwrap();
+
+        // --- Building model: unit cube with window texture ---
+        let bm_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let bm_weak = unsafe { bm_mesh.make_weak() };
+        let mut building_model = rl.load_model_from_mesh(thread, bm_weak).unwrap();
+        building_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &window_tex);
+
+        // --- Ground model: large textured plane ---
+        let half = cfg.world_half() * 2.0;
+        let gm_mesh = Mesh::gen_mesh_plane(thread, half, half, 1, 1);
+        let gm_weak = unsafe { gm_mesh.make_weak() };
+        let mut ground_model = rl.load_model_from_mesh(thread, gm_weak).unwrap();
+        ground_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &ground_tex);
+
         Assets {
-            road_tex,
+            building_model,
             window_tex,
+            ground_model,
             ground_tex,
+            road_tex,
             sky_top: p.sky_top(),
             sky_bottom: p.sky_bottom(),
         }
@@ -74,11 +97,12 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
     let half = city.ground_half;
     let p = cfg.palette();
 
-    // Ground base plane (sidewalk-ish).
-    d3.draw_plane(
-        Vector3 { x: 0.0, y: 0.02, z: 0.0 },
-        Vector2::new(half * 2.0, half * 2.0),
-        p.sidewalk(),
+    // Textured ground plane.
+    d3.draw_model(
+        &assets.ground_model,
+        Vector3 { x: 0.0, y: 0.0, z: 0.0 },
+        1.0,
+        Color::WHITE,
     );
 
     let n = city.blocks;
@@ -86,17 +110,15 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
     let rw = city.road_width;
     let origin = -half;
 
-    // Roads: strips along grid lines.
+    // Roads: colored strips along grid lines.
     let road_col = p.road();
     for i in 0..=n {
         let line = origin + i as f32 * bs;
-        // Horizontal road (runs along X) centered on z=line
         d3.draw_plane(
             Vector3 { x: 0.0, y: 0.03, z: line },
             Vector2::new(half * 2.0, rw),
             road_col,
         );
-        // Vertical road (runs along Z) centered on x=line
         d3.draw_plane(
             Vector3 { x: line, y: 0.03, z: 0.0 },
             Vector2::new(rw, half * 2.0),
@@ -104,21 +126,26 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         );
     }
 
-    // Lane center dashes (yellow) — simplified: one dash per lane segment.
+    // Lane center dashes (yellow).
     let yellow = Color::new(220, 190, 70, 255);
     for lane in &city.lanes {
         let a = city.intersection(lane.from.0, lane.from.1);
         let b = city.intersection(lane.to.0, lane.to.1);
-        // Offset to the right side of travel for lane center.
-        let (cx, cz) = lane_center(a, b, lane, rw);
-        let mid = Vector3 { x: (a.x + b.x) * 0.5 + cx, y: 0.05, z: (a.z + b.z) * 0.5 + cz };
+        let (cx, cz) = lane_center(lane, rw);
+        let mid = Vector3 {
+            x: (a.x + b.x) * 0.5 + cx,
+            y: 0.05,
+            z: (a.z + b.z) * 0.5 + cz,
+        };
         d3.draw_plane(mid, Vector2::new(2.0, 0.3), yellow);
     }
 
-    // Parks (green blocks) and sidewalks already covered by ground; draw grass on park lots.
+    // Parks: grass planes + trees.
     for bi in 0..n {
         for bj in 0..n {
-            if !city.parks[bi * n + bj] { continue; }
+            if !city.parks[bi * n + bj] {
+                continue;
+            }
             let cx = origin + (bi as f32 + 0.5) * bs;
             let cz = origin + (bj as f32 + 0.5) * bs;
             let lh = cfg.lot_half();
@@ -127,24 +154,30 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
                 Vector2::new(lh * 2.0, lh * 2.0),
                 p.grass(),
             );
-            // A couple of "trees": green spheres on brown trunks.
             for k in 0..3 {
                 let tx = cx + (k as f32 - 1.0) * 6.0;
                 let tz = cz + 2.0;
-                d3.draw_cylinder(Vector3 { x: tx, y: 1.0, z: tz }, 0.3, 0.3, 2.0, 6, Color::new(90, 60, 40, 255));
-                d3.draw_sphere(Vector3 { x: tx, y: 2.6, z: tz }, 1.2, Color::new(40, 120, 50, 255));
+                d3.draw_cylinder(
+                    Vector3 { x: tx, y: 1.0, z: tz },
+                    0.3, 0.3, 2.0, 6,
+                    Color::new(90, 60, 40, 255),
+                );
+                d3.draw_sphere(
+                    Vector3 { x: tx, y: 2.6, z: tz },
+                    1.2,
+                    Color::new(40, 120, 50, 255),
+                );
             }
         }
     }
 
-    // Buildings.
+    // Buildings: textured model tinted per-building.
     for b in &city.buildings {
         draw_building(d3, b, assets, &p);
     }
 }
 
-fn lane_center(_a: Vector3, _b: Vector3, lane: &crate::world::city::Lane, rw: f32) -> (f32, f32) {
-    // Right-hand traffic: offset lane center to the right of travel direction.
+fn lane_center(lane: &crate::world::city::Lane, rw: f32) -> (f32, f32) {
     let offset = rw * 0.25;
     match lane.axis {
         Axis::X => (0.0, -offset * lane.dir as f32),
@@ -159,17 +192,22 @@ fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &
     let hgt = h.y * 2.0;
     let l = h.z * 2.0;
     let body = p.building(b.color_index);
-    // Body box.
-    d3.draw_cube(c, w, hgt, l, body);
-    // Window facade: a slightly inset bluish box to suggest lit windows.
+
     if b.has_windows {
-        d3.draw_cube(
-            Vector3 { x: c.x, y: c.y, z: c.z },
-            w * 0.92, hgt * 0.96, l * 0.92,
-            Color::new(70, 90, 130, 255),
+        // Textured building: window facade tinted by body color.
+        d3.draw_model_ex(
+            &assets.building_model,
+            c,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            0.0,
+            Vector3 { x: w, y: hgt, z: l },
+            body,
         );
+    } else {
+        d3.draw_cube(c, w, hgt, l, body);
     }
-    // Roof cap slightly darker.
+
+    // Roof cap.
     let top = Vector3 { x: c.x, y: c.y + h.y + 0.1, z: c.z };
     d3.draw_cube(top, w * 0.9, 0.4, l * 0.9, p.building_top(b.color_index));
     // Edge wires for definition.
@@ -181,22 +219,21 @@ pub fn draw_car(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color
     let body_w = 2.0;
     let body_h = 0.8;
     let body_l = 4.2;
-    // Body box.
     d3.draw_cube(pos, body_w, body_h, body_l, color);
     d3.draw_cube_wires(pos, body_w, body_h, body_l, Color::new(20, 20, 20, 255));
     // Cabin.
     let cabin = Vector3 { x: pos.x, y: pos.y + 0.7, z: pos.z - 0.2 };
     d3.draw_cube(cabin, 1.6, 0.6, 2.0, Color::new(60, 80, 110, 255));
-    // Wheels (4 cylinders), oriented along the car's X axis.
+    // Wheels.
     let wheel_offs = [
-        ( body_w * 0.5,  body_l * 0.32),
-        (-body_w * 0.5,  body_l * 0.32),
-        ( body_w * 0.5, -body_l * 0.32),
+        (body_w * 0.5, body_l * 0.32),
+        (-body_w * 0.5, body_l * 0.32),
+        (body_w * 0.5, -body_l * 0.32),
         (-body_w * 0.5, -body_l * 0.32),
     ];
     let (sx, sz) = (yaw.sin(), yaw.cos());
     for (ox, oz) in wheel_offs {
-        let wx = pos.x + ox * sz + oz * sx; // rotate local offset by yaw
+        let wx = pos.x + ox * sz + oz * sx;
         let wz = pos.z - ox * sx + oz * sz;
         d3.draw_cylinder(
             Vector3 { x: wx, y: pos.y - 0.4, z: wz },
@@ -204,20 +241,44 @@ pub fn draw_car(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color
             Color::new(25, 25, 25, 255),
         );
     }
-    // Headlights + taillights (small cubes) for life.
-    let (fx, fz) = (pos.x + sz * body_l * 0.5, pos.z + sz * 0.0 + sz * body_l * 0.5);
-    let _ = (fx, fz);
-    // Damage smoke tint: darken with damage.
+    // Headlights (front) + taillights (rear).
+    let fwd_x = sx * body_l * 0.5;
+    let fwd_z = sz * body_l * 0.5;
+    let right_x = sz * body_w * 0.4;
+    let right_z = -sx * body_w * 0.4;
+    d3.draw_cube(
+        Vector3 { x: pos.x + fwd_x + right_x, y: pos.y, z: pos.z + fwd_z + right_z },
+        0.3, 0.2, 0.2,
+        Color::new(255, 255, 200, 255),
+    );
+    d3.draw_cube(
+        Vector3 { x: pos.x + fwd_x - right_x, y: pos.y, z: pos.z + fwd_z - right_z },
+        0.3, 0.2, 0.2,
+        Color::new(255, 255, 200, 255),
+    );
+    d3.draw_cube(
+        Vector3 { x: pos.x - fwd_x + right_x, y: pos.y, z: pos.z - fwd_z + right_z },
+        0.3, 0.2, 0.2,
+        Color::new(200, 40, 40, 255),
+    );
+    d3.draw_cube(
+        Vector3 { x: pos.x - fwd_x - right_x, y: pos.y, z: pos.z - fwd_z - right_z },
+        0.3, 0.2, 0.2,
+        Color::new(200, 40, 40, 255),
+    );
+    // Damage smoke.
     if damaged > 0.4 {
-        let dark = Color::new(60, 40, 30, 255);
-        d3.draw_cube_wires(pos, body_w + 0.05, body_h + 0.05, body_l + 0.05, dark);
+        d3.draw_cube_wires(
+            pos,
+            body_w + 0.05, body_h + 0.05, body_l + 0.05,
+            Color::new(60, 40, 30, 255),
+        );
     }
 }
 
 /// Draw a humanoid character: capsule body + head, tinted by `color`.
 pub fn draw_character(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color, dead: bool) {
     if dead {
-        // Lying down: a flat box.
         d3.draw_cube(
             Vector3 { x: pos.x, y: 0.3, z: pos.z },
             0.8, 0.4, 1.8,
@@ -226,15 +287,15 @@ pub fn draw_character(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color:
         return;
     }
     let body = Vector3 { x: pos.x, y: pos.y + 0.1, z: pos.z };
-    // Torso.
     d3.draw_cylinder(body, 0.35, 0.35, 1.0, 8, color);
-    // Head.
-    d3.draw_sphere(Vector3 { x: body.x, y: body.y + 0.75, z: body.z }, 0.28, Color::new(220, 180, 150, 255));
-    // Facing indicator: a small forward nub.
+    d3.draw_sphere(
+        Vector3 { x: body.x, y: body.y + 0.75, z: body.z },
+        0.28,
+        Color::new(220, 180, 150, 255),
+    );
     let (sx, sz) = (yaw.sin(), yaw.cos());
     let nub = Vector3 { x: body.x + sx * 0.3, y: body.y + 0.2, z: body.z + sz * 0.3 };
     d3.draw_cube(nub, 0.2, 0.2, 0.2, Color::new(30, 30, 40, 255));
-    // Legs (two small boxes).
     d3.draw_cube(
         Vector3 { x: body.x - 0.15, y: body.y - 0.7, z: body.z },
         0.2, 0.8, 0.25,
