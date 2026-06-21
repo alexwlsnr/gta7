@@ -51,7 +51,14 @@ pub fn fire_weapon(
     }
 
     let muzzle = vadd(cam_pos, vscale(dir, 0.5));
-    fx.muzzle(muzzle);
+    // The visual origin of the shot is from the player's gun position.
+    let shoot_origin = if player.in_vehicle.is_some() {
+        vadd(player.pos, Vector3 { x: 0.0, y: 0.8, z: 0.0 })
+    } else {
+        vadd(player.pos, Vector3 { x: 0.0, y: 1.2, z: 0.0 })
+    };
+    let flash_pos = vadd(shoot_origin, vscale(dir, 0.6));
+    fx.muzzle(flash_pos);
 
     // Find closest hit among all targets.
     let mut best: Option<(f32, HitKind)> = None;
@@ -106,7 +113,13 @@ pub fn fire_weapon(
 
     let (dist, kind) = best.unwrap_or((range, HitKind::Miss));
     let end = vadd(muzzle, vscale(dir, dist.min(range)));
-    fx.tracer(muzzle, end);
+    // Draw the tracer from the player's gun to the hit point
+    let shoot_origin = if player.in_vehicle.is_some() {
+        vadd(player.pos, Vector3 { x: 0.0, y: 0.8, z: 0.0 })
+    } else {
+        vadd(player.pos, Vector3 { x: 0.0, y: 1.2, z: 0.0 })
+    };
+    fx.tracer(vadd(shoot_origin, vscale(dir, 0.6)), end);
 
     // Apply damage.
     match kind {

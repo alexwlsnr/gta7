@@ -29,14 +29,6 @@ fn main() {
                 rl.toggle_fullscreen();
             }
         }
-
-        // Focus auto-capture: capture mouse on click/focus, release on focus loss.
-        if rl.is_window_focused() {
-            rl.disable_cursor();
-        } else {
-            rl.enable_cursor();
-        }
-
         // Hotkeys.
         game.handle_hotkeys(&rl);
 
