@@ -183,27 +183,19 @@ pub fn melee_attack(
 }
 
 /// Cop shoots at player (hitscan with accuracy based on distance).
+/// Returns true if the shot connects (damage applied by game orchestrator).
 pub fn cop_fire(
     cop_pos: Vector3,
     player_pos: Vector3,
-    player: &mut Player,
     fx: &mut Fx,
 ) -> bool {
     let dist = vdist_xz(cop_pos, player_pos);
-    // Hit chance decreases with distance.
     let hit_chance = (0.5 - dist * 0.005).max(0.05);
     let dir = vnorm(vsub(vadd(player_pos, Vector3 { x: 0.0, y: 1.0, z: 0.0 }), cop_pos));
     let muzzle = vadd(cop_pos, vscale(dir, 0.5));
     fx.muzzle(muzzle);
     fx.tracer(muzzle, vadd(muzzle, vscale(dir, dist)));
-
-    if rand::random::<f32>() < hit_chance {
-        player.take_damage(10.0);
-        fx.blood(vadd(player_pos, Vector3 { x: 0.0, y: 1.0, z: 0.0 }));
-        true
-    } else {
-        false
-    }
+    rand::random::<f32>() < hit_chance
 }
 
 fn ped_aabb(pos: Vector3) -> AABB {

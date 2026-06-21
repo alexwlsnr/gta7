@@ -337,7 +337,19 @@ impl<'a> Game<'a> {
         for cop in self.cops.iter_mut() {
             let fired = cop.update(dt, &self.city, player_pos, cops_shoot);
             if fired {
-                cop_fire(cop.pos, player_pos, &mut self.player, &mut self.fx);
+                let hit = cop_fire(cop.pos, player_pos, &mut self.fx);
+                if hit {
+                    let dmg = 10.0;
+                    if let Some(vi) = self.player.in_vehicle {
+                        self.vehicles[vi].take_damage(dmg);
+                        // Spawn sparks on the car
+                        let hit_point = vadd(self.player.pos, Vector3 { x: 0.0, y: 0.8, z: 0.0 });
+                        self.fx.burst(hit_point, 5, 2.0, Color::new(255, 200, 80, 255), 0.2, 5.0);
+                    } else {
+                        self.player.take_damage(dmg);
+                        self.fx.blood(vadd(player_pos, Vector3 { x: 0.0, y: 1.0, z: 0.0 }));
+                    }
+                }
             }
         }
         // Despawn dead cops.
@@ -502,9 +514,21 @@ impl<'a> Game<'a> {
             self.sfx.crash.play();
         }
 
-        // --- Vehicle explosions ---
+        // --- Vehicle fire & explosions ---
         let mut explosions = Vec::new();
         for v in self.vehicles.iter_mut() {
+            // If car is down to 20% health or less, it catches fire and degrades over 30s
+            if !v.destroyed && v.health <= v.max_health * 0.20 && v.health > 0.0 {
+                let decay = (v.max_health * 0.20) / 30.0 * dt;
+                v.take_damage(decay);
+                
+                // Spawn fire particles at the engine bay (front of car)
+                let fwd = dir_from_yaw(v.yaw);
+                let engine_pos = vadd(v.pos, vscale(fwd, 1.2));
+                // Rises up (negative gravity)
+                self.fx.burst(engine_pos, 2, 2.0, Color::new(255, 120, 20, 220), 0.4, -4.0);
+            }
+
             let exploded = v.step_explosion(dt);
             if exploded {
                 explosions.push(v.pos);
@@ -513,24 +537,24 @@ impl<'a> Game<'a> {
         for ex in &explosions {
             self.sfx.explosion.play();
             self.fx.explosion(*ex);
-            // Damage nearby entities.
+            // Damage nearby entities (lethal explosion damage)
             for ped in self.peds.iter_mut() {
                 if vdist_xz(ped.pos, *ex) < 6.0 {
-                    ped.take_damage(80.0);
+                    ped.take_damage(180.0); // lethal
                     self.wanted.add_heat(0.5);
                 }
             }
             for cop in self.cops.iter_mut() {
                 if vdist_xz(cop.pos, *ex) < 6.0 {
-                    cop.take_damage(80.0);
+                    cop.take_damage(180.0); // lethal
                 }
             }
             if vdist_xz(self.player.pos, *ex) < 6.0 {
-                self.player.take_damage(40.0);
+                self.player.take_damage(250.0); // lethal
             }
             for v in self.vehicles.iter_mut() {
                 if vdist_xz(v.pos, *ex) < 5.0 && !v.destroyed {
-                    v.take_damage(50.0);
+                    v.take_damage(110.0); // can trigger chain reaction
                 }
             }
         }
@@ -637,8 +661,25 @@ impl<'a> Game<'a> {
     /// Render one frame with interpolation alpha.
     pub fn render(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, alpha: f32, fps: i32) {
         let cam = self.camera.to_camera3d();
+        let cam_pos = self.camera.pos;
+        let cam_fwd = self.camera.forward();
         let rate_label = self.cfg.logic_rate.label();
         let debug = self.cfg.debug_overlay;
+
+        // Pre-calculate screen coordinates for floating vehicle health bars (prevents borrow issues inside draw block)
+        let mut vehicle_health_bars = Vec::new();
+        for v in &self.vehicles {
+            if v.destroyed || v.health >= v.max_health {
+                continue;
+            }
+            let bar_world_pos = Vector3 { x: v.pos.x, y: v.pos.y + 1.4, z: v.pos.z };
+            let to_point = vsub(bar_world_pos, cam_pos);
+            // Frustum check: only draw if in front of camera
+            if vdot(to_point, cam_fwd) > 0.1 {
+                let screen_pos = rl.get_world_to_screen(bar_world_pos, cam);
+                vehicle_health_bars.push((screen_pos, v.health / v.max_health));
+            }
+        }
 
         let mut d = rl.begin_drawing(thread);
         // Clear color + depth buffer (depth clear is essential — without it 3D
@@ -773,6 +814,29 @@ impl<'a> Game<'a> {
             debug,
             fps,
         );
+
+        // Draw floating vehicle health bars above damaged vehicles.
+        for (screen_pos, hp_ratio) in vehicle_health_bars {
+            let bar_w = 46;
+            let bar_h = 6;
+            let bx = (screen_pos.x as i32) - bar_w / 2;
+            let by = (screen_pos.y as i32) - bar_h / 2;
+            
+            // Background
+            d.draw_rectangle(bx, by, bar_w, bar_h, Color::new(40, 40, 40, 180));
+            // Health color (Red for fire <=20%, Orange <=50%, Green fine)
+            let color = if hp_ratio <= 0.20 {
+                Color::new(230, 40, 40, 255)
+            } else if hp_ratio <= 0.50 {
+                Color::new(230, 130, 30, 255)
+            } else {
+                Color::new(40, 200, 60, 255)
+            };
+            let hp_w = (hp_ratio * (bar_w - 2) as f32) as i32;
+            d.draw_rectangle(bx + 1, by + 1, hp_w.max(0).min(bar_w - 2), bar_h - 2, color);
+            // Border
+            d.draw_rectangle_lines(bx, by, bar_w, bar_h, Color::new(10, 10, 10, 255));
+        }
     }
 
     /// Handle hotkeys (called per render frame).
