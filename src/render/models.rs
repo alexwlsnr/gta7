@@ -10,6 +10,7 @@ use crate::world::city::{Building, City, Axis};
 /// the `Model`s hold raw pointers to them — they must outlive the models.
 pub struct Assets {
     pub building_model: Model,   // unit cube with window texture
+    pub plain_cube_model: Model, // unit cube, no texture (for car bodies)
     pub window_tex: Texture2D,
     pub ground_model: Model,     // large plane with ground texture
     pub ground_tex: Texture2D,
@@ -79,9 +80,14 @@ impl Assets {
         ground_model
             .materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &ground_tex);
+        // --- Plain cube model (for car bodies, no texture) ---
+        let pc_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let pc_weak = unsafe { pc_mesh.make_weak() };
+        let plain_cube_model = rl.load_model_from_mesh(thread, pc_weak).unwrap();
 
         Assets {
             building_model,
+            plain_cube_model,
             window_tex,
             ground_model,
             ground_tex,
@@ -215,23 +221,51 @@ fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &
 }
 
 /// Draw a car body at a position with a yaw (radians) and a color.
-pub fn draw_car(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color, damaged: f32) {
+/// Uses draw_model_ex for proper yaw rotation of the body + cabin.
+pub fn draw_car(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3, yaw: f32, color: Color, damaged: f32) {
     let body_w = 2.0;
     let body_h = 0.8;
     let body_l = 4.2;
-    d3.draw_cube(pos, body_w, body_h, body_l, color);
-    d3.draw_cube_wires(pos, body_w, body_h, body_l, Color::new(20, 20, 20, 255));
-    // Cabin.
-    let cabin = Vector3 { x: pos.x, y: pos.y + 0.7, z: pos.z - 0.2 };
-    d3.draw_cube(cabin, 1.6, 0.6, 2.0, Color::new(60, 80, 110, 255));
-    // Wheels.
+    let up = Vector3 { x: 0.0, y: 1.0, z: 0.0 };
+    let yaw_deg = yaw.to_degrees();
+    let (sx, sz) = (yaw.sin(), yaw.cos());
+
+    // Body: rotated cube model.
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        pos,
+        up, yaw_deg,
+        Vector3 { x: body_w, y: body_h, z: body_l },
+        color,
+    );
+    // Body outline.
+    d3.draw_model_wires_ex(
+        &assets.plain_cube_model,
+        pos,
+        up, yaw_deg,
+        Vector3 { x: body_w, y: body_h, z: body_l },
+        Color::new(20, 20, 20, 255),
+    );
+
+    // Cabin: offset backward from center, rotated with the car.
+    let cabin_off_x = -0.2 * sx;
+    let cabin_off_z = -0.2 * sz;
+    let cabin_pos = Vector3 { x: pos.x + cabin_off_x, y: pos.y + 0.7, z: pos.z + cabin_off_z };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        cabin_pos,
+        up, yaw_deg,
+        Vector3 { x: 1.6, y: 0.6, z: 2.0 },
+        Color::new(60, 80, 110, 255),
+    );
+
+    // Wheels (4 cylinders), positioned using rotated local offsets.
     let wheel_offs = [
         (body_w * 0.5, body_l * 0.32),
         (-body_w * 0.5, body_l * 0.32),
         (body_w * 0.5, -body_l * 0.32),
         (-body_w * 0.5, -body_l * 0.32),
     ];
-    let (sx, sz) = (yaw.sin(), yaw.cos());
     for (ox, oz) in wheel_offs {
         let wx = pos.x + ox * sz + oz * sx;
         let wz = pos.z - ox * sx + oz * sz;
@@ -241,7 +275,8 @@ pub fn draw_car(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color
             Color::new(25, 25, 25, 255),
         );
     }
-    // Headlights (front) + taillights (rear).
+
+    // Headlights (front, white) + taillights (rear, red).
     let fwd_x = sx * body_l * 0.5;
     let fwd_z = sz * body_l * 0.5;
     let right_x = sz * body_w * 0.4;
@@ -266,44 +301,74 @@ pub fn draw_car(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color
         0.3, 0.2, 0.2,
         Color::new(200, 40, 40, 255),
     );
+
     // Damage smoke.
     if damaged > 0.4 {
-        d3.draw_cube_wires(
+        d3.draw_model_wires_ex(
+            &assets.plain_cube_model,
             pos,
-            body_w + 0.05, body_h + 0.05, body_l + 0.05,
+            up, yaw_deg,
+            Vector3 { x: body_w + 0.05, y: body_h + 0.05, z: body_l + 0.05 },
             Color::new(60, 40, 30, 255),
         );
     }
 }
 
 /// Draw a humanoid character: capsule body + head, tinted by `color`.
-pub fn draw_character(d3: &mut impl RaylibDraw3D, pos: Vector3, yaw: f32, color: Color, dead: bool) {
+/// Now takes Assets to draw rotated parts via draw_model_ex.
+pub fn draw_character(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3, yaw: f32, color: Color, dead: bool) {
+    let up = Vector3 { x: 0.0, y: 1.0, z: 0.0 };
+    let yaw_deg = yaw.to_degrees();
     if dead {
-        d3.draw_cube(
-            Vector3 { x: pos.x, y: 0.3, z: pos.z },
-            0.8, 0.4, 1.8,
+        // Lying down: flat rotated box.
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            Vector3 { x: pos.x, y: 0.2, z: pos.z },
+            up, yaw_deg,
+            Vector3 { x: 0.8, y: 0.4, z: 1.8 },
             Color::new(color.r / 2, color.g / 2, color.b / 2, 255),
         );
         return;
     }
     let body = Vector3 { x: pos.x, y: pos.y + 0.1, z: pos.z };
+    // Torso (cylinder is rotationally symmetric, so simple draw is fine).
     d3.draw_cylinder(body, 0.35, 0.35, 1.0, 8, color);
+    // Head.
     d3.draw_sphere(
         Vector3 { x: body.x, y: body.y + 0.75, z: body.z },
         0.28,
         Color::new(220, 180, 150, 255),
     );
     let (sx, sz) = (yaw.sin(), yaw.cos());
+    // Facing indicator (nose).
     let nub = Vector3 { x: body.x + sx * 0.3, y: body.y + 0.2, z: body.z + sz * 0.3 };
     d3.draw_cube(nub, 0.2, 0.2, 0.2, Color::new(30, 30, 40, 255));
-    d3.draw_cube(
-        Vector3 { x: body.x - 0.15, y: body.y - 0.7, z: body.z },
-        0.2, 0.8, 0.25,
+
+    // Legs: rotated relative to character's facing direction.
+    // Local right axis in screen coordinates is (-sz, 0, sx).
+    let left_leg_pos = Vector3 {
+        x: body.x + 0.15 * sz,
+        y: body.y - 0.7,
+        z: body.z - 0.15 * sx,
+    };
+    let right_leg_pos = Vector3 {
+        x: body.x - 0.15 * sz,
+        y: body.y - 0.7,
+        z: body.z + 0.15 * sx,
+    };
+
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        left_leg_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.2, y: 0.8, z: 0.25 },
         Color::new(40, 45, 70, 255),
     );
-    d3.draw_cube(
-        Vector3 { x: body.x + 0.15, y: body.y - 0.7, z: body.z },
-        0.2, 0.8, 0.25,
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        right_leg_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.2, y: 0.8, z: 0.25 },
         Color::new(40, 45, 70, 255),
     );
 }

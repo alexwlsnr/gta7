@@ -36,8 +36,8 @@ impl FollowCamera {
         sensitivity: f32,
         dt: f32,
     ) {
-        // Orbit control via mouse (standard non-inverted).
-        self.yaw += look_dx * sensitivity;
+        // Orbit control via mouse (standard: mouse right = look right).
+        self.yaw -= look_dx * sensitivity;
         self.pitch += look_dy * sensitivity;
         self.pitch = clamp(self.pitch, 0.05, 1.3);
 

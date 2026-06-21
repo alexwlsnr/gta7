@@ -55,15 +55,13 @@ impl Input {
     }
 
     /// Clear edge inputs after a logic step consumes them.
+    /// Look deltas are NOT drained here — they're accumulated in Game and
+    /// consumed by the camera update, so they survive frames with no logic step.
     pub fn drain_edges(&mut self) {
         self.enter_exit = false;
         self.reload = false;
         self.interact = false;
         self.switch_weapon = false;
         self.melee = false;
-        // look deltas are per-render-frame; drain so they don't accumulate
-        // across multiple logic steps in one frame.
-        self.look_dx = 0.0;
-        self.look_dy = 0.0;
     }
 }

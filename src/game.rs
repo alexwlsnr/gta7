@@ -38,6 +38,8 @@ pub struct Game {
     pub time: f32,
     pub panic_pos: Option<Vector3>, // last gunfire position (for ped panic)
     pub mission_target_idx: Option<usize>, // index into peds for kill mission
+    pub look_accum_x: f32, // accumulated mouse deltas (survive frames with no logic step)
+    pub look_accum_y: f32,
 }
 
 impl Game {
@@ -140,6 +142,8 @@ impl Game {
             time: 0.0,
             panic_pos: None,
             mission_target_idx: None,
+            look_accum_x: 0.0,
+            look_accum_y: 0.0,
         }
     }
 
@@ -206,8 +210,11 @@ impl Game {
         }
 
         // --- Player update (on foot or driven vehicle) ---
-        let look_dx = input.look_dx;
-        let look_dy = input.look_dy;
+        // Consume accumulated look deltas (survives frames with no logic step).
+        let look_dx = self.look_accum_x;
+        let look_dy = self.look_accum_y;
+        self.look_accum_x = 0.0;
+        self.look_accum_y = 0.0;
         if let Some(vi) = self.player.in_vehicle {
             self.vehicles[vi].update_driven(input, &self.city, &self.cfg, dt);
             // Player position follows vehicle.
@@ -546,28 +553,28 @@ impl Game {
             for v in &self.vehicles {
                 let rp = v.render_pos(alpha);
                 let ry = v.render_yaw(alpha);
-                draw_car(&mut d3, rp, ry, v.color, v.damage_level());
+                draw_car(&mut d3, &self.assets, rp, ry, v.color, v.damage_level());
             }
 
             // Peds.
             for ped in &self.peds {
                 let rp = ped.render_pos(alpha);
                 let ry = ped.render_yaw(alpha);
-                draw_character(&mut d3, rp, ry, ped.color, ped.dead());
+                draw_character(&mut d3, &self.assets, rp, ry, ped.color, ped.dead());
             }
 
             // Cops (blue uniform).
             for cop in &self.cops {
                 let rp = cop.render_pos(alpha);
                 let ry = cop.render_yaw(alpha);
-                draw_character(&mut d3, rp, ry, Color::new(40, 60, 140, 255), cop.dead());
+                draw_character(&mut d3, &self.assets, rp, ry, Color::new(40, 60, 140, 255), cop.dead());
             }
 
             // Player (only if on foot and alive).
             if self.player.in_vehicle.is_none() && self.player.alive {
                 let rp = self.player.render_pos(alpha);
                 let ry = self.player.render_yaw(alpha);
-                draw_character(&mut d3, rp, ry, Color::new(60, 180, 80, 255), !self.player.alive);
+                draw_character(&mut d3, &self.assets, rp, ry, Color::new(60, 180, 80, 255), !self.player.alive);
             }
 
             // FX.

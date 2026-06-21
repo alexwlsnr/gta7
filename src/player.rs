@@ -154,7 +154,7 @@ impl Player {
 
         // Movement relative to yaw
         let fwd = dir_from_yaw(self.yaw);
-        let right = Vector3 { x: fwd.z, y: 0.0, z: -fwd.x };
+        let right = Vector3 { x: -fwd.z, y: 0.0, z: fwd.x };
         let mut move_dir = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
         move_dir = vadd(move_dir, vscale(fwd, input.move_y));
         move_dir = vadd(move_dir, vscale(right, input.move_x));
