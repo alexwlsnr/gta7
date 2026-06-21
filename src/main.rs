@@ -19,18 +19,9 @@ fn main() {
     let mut clock = Clock::new(game.cfg.logic_rate);
 
     while !rl.window_should_close() {
-        // Fullscreen toggle with F11 (scales to native resolution properly).
+        // Fullscreen toggle with F11.
         if rl.is_key_pressed(raylib::consts::KeyboardKey::KEY_F11) {
-            if rl.is_window_fullscreen() {
-                rl.toggle_fullscreen();
-                rl.set_window_size(1280, 720);
-            } else {
-                let monitor = raylib::core::window::get_current_monitor();
-                let w = raylib::core::window::get_monitor_width(monitor);
-                let h = raylib::core::window::get_monitor_height(monitor);
-                rl.set_window_size(w, h);
-                rl.toggle_fullscreen();
-            }
+            rl.toggle_fullscreen();
         }
         // Hotkeys.
         game.handle_hotkeys(&rl);
