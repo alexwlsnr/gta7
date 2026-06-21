@@ -44,3 +44,40 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gta7-${{ runner.os }}
+          path: target/release/gta7
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Rename binaries
+        run: |
+          mkdir binaries
+          mv dist/gta7-Linux       gta7-linux            && mv gta7-linux       binaries/ || true
+          mv dist/gta7-MacOS       gta7-macos            && mv gta7-macos       binaries/ || true
+          mv dist/gta7-Windows.exe gta7-windows.exe      && mv gta7-windows.exe binaries/ || true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: latest
+          tag_name: latest
+          files: binaries/*
+          prerelease: true
+          overwrite: true
+          generate_release_notes: true
