@@ -116,13 +116,12 @@ mod tests {
     fn box_at(x: f32, z: f32, hx: f32, hz: f32) -> AABB {
         AABB::from_center(x, 1.0, z, hx, 1.0, hz)
     }
-
     #[test]
     fn circle_outside_pushes_back() {
-        let b = box_at(0.0, 0.0, 1.0, 1.0);
-        let p = circle_vs_aabb(3.0, 0.0, 0.5, b);
+        let b = box_at(0.0, 0.0, 1.0, 1.0); // spans -1..1
+        let p = circle_vs_aabb(1.3, 0.0, 0.5, b);
         assert!(p.x > 0.0);
-        assert!((p.x - 1.5).abs() < 0.05, "push {}", p.x);
+        assert!((p.x - 0.2).abs() < 0.05, "push {}", p.x);
     }
 
     #[test]

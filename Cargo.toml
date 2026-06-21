@@ -3,6 +3,14 @@ name = "gta7"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "gta7"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gta7"
+path = "src/main.rs"
+
 [dependencies]
 raylib = "6.0"
 rand = "0.8"

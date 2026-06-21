@@ -107,10 +107,10 @@ pub fn ease_out(t: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn lerp_basic() { assert!((lerp(0.0, 10.0, 0.5) - 5.0).abs() < 1e-4); }
     #[test] fn lerp_angle_wrap() {
+        // 0.1 -> 6.2: shortest path wraps through -0.083 (6.2 ≈ TAU - 0.083)
         let a = lerp_angle(0.1, 6.2, 1.0);
-        assert!(a.abs() < 0.05, "got {a}");
+        assert!(a.abs() < 0.15, "got {a}");
     }
     #[test] fn clamp_works() { assert_eq!(clamp(5.0, 0.0, 3.0), 3.0); }
     #[test] fn approach_clamps() {

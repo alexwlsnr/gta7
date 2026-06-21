@@ -1,15 +1,6 @@
-use raylib::prelude::*;
+use gta7::mathx;
 
 fn main() {
-    let (mut rl, thread) = raylib::init()
-        .size(1280, 720)
-        .title("GTA7")
-        .vsync()
-        .build();
-    rl.set_target_fps(60);
-    while !rl.window_should_close() {
-        let mut d = rl.begin_drawing(&thread);
-        d.clear_background(Color::new(20, 20, 28, 255));
-        d.draw_text("GTA7 bootstrap OK", 40, 40, 28, Color::RAYWHITE);
-    }
+    let _ = mathx::lerp(0.0, 1.0, 0.5); // keep dep used
+    println!("GTA7 binary placeholder — full main coming in integration phase.");
 }
