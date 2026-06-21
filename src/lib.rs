@@ -12,3 +12,5 @@ pub mod wanted;
 pub mod ai;
 pub mod pickup;
 pub mod mission;
+pub mod hud;
+pub mod game;
