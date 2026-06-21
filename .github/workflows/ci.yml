@@ -71,7 +71,7 @@ jobs:
       - name: Download macOS binary
         uses: actions/download-artifact@v4
         with:
-          name: gta7-MacOS
+          name: gta7-macOS
           path: dist/gta7-macos
 
       - name: Download Windows binary
