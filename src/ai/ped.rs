@@ -6,6 +6,9 @@ use crate::world::city::City;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PedState { Wander, Flee, Dead }
 
+use crate::render::models::HairStyle;
+use raylib::color::Color;
+
 pub struct Ped {
     pub pos: Vector3,
     pub prev_pos: Vector3,
@@ -14,14 +17,39 @@ pub struct Ped {
     pub health: f32,
     pub state: PedState,
     pub dead_timer: f32,
-    pub color: raylib::color::Color,
+    pub color: Color, // Shirt color
+    pub pants_color: Color,
+    pub hair_color: Color,
+    pub hair_style: HairStyle,
+    pub has_glasses: bool,
     pub cash: i32,
     pub wander_timer: f32,
     pub flee_dir: Vector3,
 }
 
 impl Ped {
-    pub fn new(pos: Vector3, color: raylib::color::Color) -> Self {
+    pub fn new(pos: Vector3, color: Color) -> Self {
+        let pants_colors = [
+            Color::new(45, 52, 85, 255),  // blue jeans
+            Color::new(30, 30, 30, 255),  // black pants
+            Color::new(100, 70, 50, 255), // brown khaki
+            Color::new(80, 85, 90, 255),  // grey pants
+        ];
+        let pants_color = pants_colors[rand::random::<usize>() % pants_colors.len()];
+
+        let hair_colors = [
+            Color::new(20, 15, 10, 255),   // black
+            Color::new(80, 50, 30, 255),   // brown
+            Color::new(210, 180, 80, 255), // blonde
+            Color::new(180, 70, 30, 255),  // ginger
+            Color::new(180, 180, 180, 255), // grey
+        ];
+        let hair_color = hair_colors[rand::random::<usize>() % hair_colors.len()];
+
+        let styles = [HairStyle::Bald, HairStyle::ShortHair, HairStyle::Afro, HairStyle::Cap];
+        let hair_style = styles[rand::random::<usize>() % styles.len()];
+        let has_glasses = rand::random::<f32>() < 0.4;
+
         Ped {
             pos,
             prev_pos: pos,
@@ -31,6 +59,10 @@ impl Ped {
             state: PedState::Wander,
             dead_timer: 0.0,
             color,
+            pants_color,
+            hair_color,
+            hair_style,
+            has_glasses,
             cash: (rand::random::<u32>() % 80) as i32 + 10,
             wander_timer: rand::random::<f32>() * 3.0,
             flee_dir: Vector3 { x: 0.0, y: 0.0, z: 0.0 },

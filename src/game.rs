@@ -572,7 +572,20 @@ impl<'a> Game<'a> {
                 let rp = ped.render_pos(alpha);
                 let ry = ped.render_yaw(alpha);
                 let is_moving = !ped.dead();
-                draw_character(&mut d3, &self.assets, rp, ry, ped.color, ped.dead(), self.time, is_moving);
+                draw_character(
+                    &mut d3,
+                    &self.assets,
+                    rp,
+                    ry,
+                    ped.color,
+                    ped.pants_color,
+                    ped.hair_color,
+                    ped.hair_style,
+                    ped.has_glasses,
+                    ped.dead(),
+                    self.time,
+                    is_moving,
+                );
             }
 
             // Cops (blue uniform).
@@ -580,15 +593,41 @@ impl<'a> Game<'a> {
                 let rp = cop.render_pos(alpha);
                 let ry = cop.render_yaw(alpha);
                 let is_moving = !cop.dead() && cop.state == crate::ai::cop::CopState::Chase;
-                draw_character(&mut d3, &self.assets, rp, ry, Color::new(30, 45, 110, 255), cop.dead(), self.time, is_moving);
+                draw_character(
+                    &mut d3,
+                    &self.assets,
+                    rp,
+                    ry,
+                    Color::new(30, 45, 110, 255), // Shirt
+                    Color::new(20, 20, 20, 255),   // Pants
+                    Color::new(20, 30, 80, 255),   // Hat color
+                    crate::render::models::HairStyle::PoliceHat,
+                    false,
+                    cop.dead(),
+                    self.time,
+                    is_moving,
+                );
             }
 
-            // Player (only if on foot and alive).
+            // Player (signature green shirt, jeans, red cap, sunglasses).
             if self.player.in_vehicle.is_none() && self.player.alive {
                 let rp = self.player.render_pos(alpha);
                 let ry = self.player.render_yaw(alpha);
                 let is_moving = vlen_xz(self.player.vel) > 0.1;
-                draw_character(&mut d3, &self.assets, rp, ry, Color::new(60, 180, 80, 255), !self.player.alive, self.time, is_moving);
+                draw_character(
+                    &mut d3,
+                    &self.assets,
+                    rp,
+                    ry,
+                    Color::new(60, 180, 80, 255), // Green shirt
+                    Color::new(45, 52, 85, 255),  // Blue jeans
+                    Color::new(200, 40, 40, 255), // Red cap
+                    crate::render::models::HairStyle::Cap,
+                    true,
+                    !self.player.alive,
+                    self.time,
+                    is_moving,
+                );
             }
 
             // FX.

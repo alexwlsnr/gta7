@@ -314,15 +314,27 @@ pub fn draw_car(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3, yaw: 
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HairStyle {
+    Bald,
+    ShortHair,
+    Afro,
+    Cap,
+    PoliceHat,
+}
+
 /// Draw a humanoid character: capsule body + head, tinted by `color`.
-/// Now takes Assets to draw rotated parts via draw_model_ex, plus time and movement
-/// animation variables to swing arms and legs.
+/// Supports variable shirt/pants/hair colors, hairstyles, and sunglasses.
 pub fn draw_character(
     d3: &mut impl RaylibDraw3D,
     assets: &Assets,
     pos: Vector3,
     yaw: f32,
-    color: Color,
+    shirt_color: Color,
+    pants_color: Color,
+    hair_color: Color,
+    hair_style: HairStyle,
+    has_glasses: bool,
     dead: bool,
     time: f32,
     is_moving: bool,
@@ -331,13 +343,13 @@ pub fn draw_character(
     let yaw_deg = yaw.to_degrees();
     
     if dead {
-        // Lying down: flat rotated box (darkened color).
+        // Lying down: flat rotated box (darkened shirt color).
         d3.draw_model_ex(
             &assets.plain_cube_model,
             Vector3 { x: pos.x, y: 0.2, z: pos.z },
             up, yaw_deg,
             Vector3 { x: 0.8, y: 0.4, z: 1.8 },
-            Color::new(color.r / 2, color.g / 2, color.b / 2, 255),
+            Color::new(shirt_color.r / 2, shirt_color.g / 2, shirt_color.b / 2, 255),
         );
         return;
     }
@@ -351,7 +363,7 @@ pub fn draw_character(
         torso_pos,
         up, yaw_deg,
         Vector3 { x: 0.5, y: 0.8, z: 0.26 },
-        color,
+        shirt_color,
     );
 
     // --- 2. Pelvis / Pants top ---
@@ -361,7 +373,7 @@ pub fn draw_character(
         pelvis_pos,
         up, yaw_deg,
         Vector3 { x: 0.48, y: 0.12, z: 0.24 },
-        Color::new(45, 52, 85, 255), // Jeans
+        pants_color,
     );
 
     // --- 3. Head (Skin color) ---
@@ -373,41 +385,102 @@ pub fn draw_character(
     );
 
     // --- 4. Sunglasses (Cool GTA glasses) ---
-    let glasses_pos = Vector3 {
-        x: head_pos.x + sx * 0.18,
-        y: head_pos.y + 0.05,
-        z: head_pos.z + sz * 0.18,
-    };
-    d3.draw_model_ex(
-        &assets.plain_cube_model,
-        glasses_pos,
-        up, yaw_deg,
-        Vector3 { x: 0.32, y: 0.08, z: 0.1 },
-        Color::new(20, 20, 20, 255),
-    );
+    if has_glasses {
+        let glasses_pos = Vector3 {
+            x: head_pos.x + sx * 0.18,
+            y: head_pos.y + 0.05,
+            z: head_pos.z + sz * 0.18,
+        };
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            glasses_pos,
+            up, yaw_deg,
+            Vector3 { x: 0.32, y: 0.08, z: 0.1 },
+            Color::new(20, 20, 20, 255), // Dark lenses
+        );
+    }
 
-    // --- 5. Cap (GTA baseball hat) ---
-    let cap_color = Color::new(200, 40, 40, 255);
-    let cap_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.22, z: head_pos.z };
-    d3.draw_model_ex(
-        &assets.plain_cube_model,
-        cap_pos,
-        up, yaw_deg,
-        Vector3 { x: 0.28, y: 0.1, z: 0.28 },
-        cap_color,
-    );
-    let brim_pos = Vector3 {
-        x: head_pos.x + sx * 0.18,
-        y: head_pos.y + 0.20,
-        z: head_pos.z + sz * 0.18,
-    };
-    d3.draw_model_ex(
-        &assets.plain_cube_model,
-        brim_pos,
-        up, yaw_deg,
-        Vector3 { x: 0.24, y: 0.02, z: 0.18 },
-        cap_color,
-    );
+    // --- 5. Hair / Headwear styles ---
+    match hair_style {
+        HairStyle::Bald => {
+            // No hair, just skin.
+        }
+        HairStyle::ShortHair => {
+            // Simple hair crop.
+            let hair_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.1, z: head_pos.z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                hair_pos,
+                up, yaw_deg,
+                Vector3 { x: 0.26, y: 0.16, z: 0.26 },
+                hair_color,
+            );
+        }
+        HairStyle::Afro => {
+            // Large round afro sphere.
+            let afro_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.08, z: head_pos.z };
+            d3.draw_sphere(afro_pos, 0.29, hair_color);
+        }
+        HairStyle::Cap => {
+            // Baseball cap.
+            let cap_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.22, z: head_pos.z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                cap_pos,
+                up, yaw_deg,
+                Vector3 { x: 0.28, y: 0.1, z: 0.28 },
+                hair_color, // cap dome
+            );
+            let brim_pos = Vector3 {
+                x: head_pos.x + sx * 0.18,
+                y: head_pos.y + 0.20,
+                z: head_pos.z + sz * 0.18,
+            };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                brim_pos,
+                up, yaw_deg,
+                Vector3 { x: 0.24, y: 0.02, z: 0.18 },
+                hair_color, // cap brim
+            );
+        }
+        HairStyle::PoliceHat => {
+            // Cop hat: peaked cap.
+            let hat_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.22, z: head_pos.z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                hat_pos,
+                up, yaw_deg,
+                Vector3 { x: 0.32, y: 0.1, z: 0.32 },
+                hair_color, // Dark blue cap
+            );
+            let visor_pos = Vector3 {
+                x: head_pos.x + sx * 0.20,
+                y: head_pos.y + 0.18,
+                z: head_pos.z + sz * 0.20,
+            };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                visor_pos,
+                up, yaw_deg,
+                Vector3 { x: 0.28, y: 0.02, z: 0.16 },
+                Color::new(10, 10, 10, 255), // Black visor peak
+            );
+            // Small gold badge in front.
+            let badge_pos = Vector3 {
+                x: head_pos.x + sx * 0.17,
+                y: head_pos.y + 0.24,
+                z: head_pos.z + sz * 0.17,
+            };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                badge_pos,
+                up, yaw_deg,
+                Vector3 { x: 0.06, y: 0.06, z: 0.04 },
+                Color::new(255, 215, 0, 255), // Gold badge
+            );
+        }
+    }
 
     // --- Animation logic ---
     let swing = if is_moving {
@@ -433,14 +506,14 @@ pub fn draw_character(
         left_leg_pos,
         up, yaw_deg,
         Vector3 { x: 0.18, y: 0.75, z: 0.2 },
-        Color::new(45, 52, 85, 255),
+        pants_color,
     );
     d3.draw_model_ex(
         &assets.plain_cube_model,
         right_leg_pos,
         up, yaw_deg,
         Vector3 { x: 0.18, y: 0.75, z: 0.2 },
-        Color::new(45, 52, 85, 255),
+        pants_color,
     );
 
     // --- 7. Arms ---
@@ -460,15 +533,16 @@ pub fn draw_character(
         left_arm_pos,
         up, yaw_deg,
         Vector3 { x: 0.14, y: 0.65, z: 0.16 },
-        color,
+        shirt_color,
     );
     d3.draw_model_ex(
         &assets.plain_cube_model,
         right_arm_pos,
         up, yaw_deg,
         Vector3 { x: 0.14, y: 0.65, z: 0.16 },
-        color,
+        shirt_color,
     );
+
 }
 
 /// Draw a vertical pickup marker: glowing cylinder + floating icon cube.
