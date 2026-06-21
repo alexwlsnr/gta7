@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+
 jobs:
   build:
     strategy:
@@ -61,18 +62,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: Download Linux binary
         uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          name: gta7-Linux
+          path: dist/gta7-linux
 
-      - name: Rename binaries
+      - name: Download macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: gta7-MacOS
+          path: dist/gta7-macos
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: gta7-Windows
+          path: dist/gta7-windows
+
+      - name: Prepare release assets
         run: |
           mkdir binaries
-          mv dist/gta7-Linux       gta7-linux            && mv gta7-linux       binaries/ || true
-          mv dist/gta7-MacOS       gta7-macos            && mv gta7-macos       binaries/ || true
-          mv dist/gta7-Windows.exe gta7-windows.exe      && mv gta7-windows.exe binaries/ || true
+          for d in dist/*; do
+            target="binaries/$(basename $d)"
+            [ -f "$d/gta7.exe" ] && cp "$d/gta7.exe" "$target.exe" || true
+            [ -f "$d/gta7" ] && cp "$d/gta7" "$target"
+          done
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
