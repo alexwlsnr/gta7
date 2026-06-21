@@ -36,9 +36,9 @@ impl FollowCamera {
         sensitivity: f32,
         dt: f32,
     ) {
-        // Orbit control via mouse.
-        self.yaw -= look_dx * sensitivity;
-        self.pitch -= look_dy * sensitivity;
+        // Orbit control via mouse (standard non-inverted).
+        self.yaw += look_dx * sensitivity;
+        self.pitch += look_dy * sensitivity;
         self.pitch = clamp(self.pitch, 0.05, 1.3);
 
         let (pivot, pivot_yaw): (Vector3, f32) = if let Some(vi) = player.in_vehicle {
@@ -52,7 +52,7 @@ impl FollowCamera {
             // Chase cam: lag behind vehicle heading.
             self.dist = 11.0;
             self.height = 5.0;
-            let target_yaw = pivot_yaw + std::f32::consts::PI;
+            let target_yaw = pivot_yaw;
             self.yaw = lerp_angle(self.yaw, target_yaw, 3.0 * dt);
             self.pitch = lerp(self.pitch, 0.35, 2.0 * dt);
         } else {
@@ -60,15 +60,15 @@ impl FollowCamera {
             self.height = 3.5;
         }
 
-        // Spherical to cartesian offset.
+        // Spherical to cartesian offset — NEGATED XZ so camera is BEHIND the target.
         let cp = self.pitch.cos();
         let sp = self.pitch.sin();
         let cy = self.yaw.cos();
         let sy = self.yaw.sin();
         let offset = Vector3 {
-            x: sy * cp * self.dist,
+            x: -sy * cp * self.dist,
             y: sp * self.dist + self.height,
-            z: cy * cp * self.dist,
+            z: -cy * cp * self.dist,
         };
         let desired = Vector3 {
             x: pivot.x + offset.x,

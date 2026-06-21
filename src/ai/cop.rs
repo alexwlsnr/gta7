@@ -56,22 +56,23 @@ impl Cop {
 
         self.fire_cooldown = (self.fire_cooldown - dt).max(0.0);
 
-        if can_shoot && dist < 40.0 && dist > 3.0 {
+        if can_shoot && dist < 40.0 && dist > 2.0 {
             self.state = CopState::Shoot;
             // Stop and shoot.
             if self.fire_cooldown <= 0.0 {
                 self.fire_cooldown = 0.8 + rand::random::<f32>() * 0.4;
                 return true;
             }
-        } else {
+        } else if dist > 1.8 {
             self.state = CopState::Chase;
-            // Chase.
+            // Chase but keep minimum separation.
             let speed = 6.0;
             let fwd = vnorm_xz(to_player);
             if vlen_xz(fwd) > 0.0 {
                 self.pos = vadd(self.pos, vscale(fwd, speed * dt));
             }
         }
+        // If dist <= 1.8, stand still (don't overlap player).
         false
     }
 

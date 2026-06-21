@@ -148,8 +148,7 @@ impl Player {
 
     /// On-foot update. Returns events (fire request) via mutable fields.
     pub fn update_on_foot(&mut self, input: &Input, city: &City, cfg: &Config, dt: f32) {
-        // Look
-        self.yaw -= input.look_dx * cfg.mouse_sensitivity;
+        // Yaw is controlled by the camera (set externally via set_yaw).
         // Recoil recovery
         self.recoil = (self.recoil - dt * 4.0).max(0.0);
 

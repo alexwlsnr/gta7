@@ -61,9 +61,9 @@ impl Game {
         for i in 0..3 {
             let angle = i as f32 * 2.1;
             let pos = Vector3 {
-                x: angle.cos() * 8.0,
+                x: angle.cos() * 4.5,
                 y: 0.0,
-                z: angle.sin() * 8.0,
+                z: angle.sin() * 4.5,
             };
             let colors = [
                 Color::new(200, 60, 60, 255),
@@ -184,7 +184,7 @@ impl Game {
                         continue;
                     }
                     let d = vdist_xz(v.pos, self.player.pos);
-                    if d < 4.0 && best.map_or(true, |(_, bd)| d < bd) {
+                    if d < 5.0 && best.map_or(true, |(_, bd)| d < bd) {
                         best = Some((i, d));
                     }
                 }
@@ -223,6 +223,10 @@ impl Game {
             look_dx, look_dy,
             self.cfg.mouse_sensitivity, dt,
         );
+        // Sync player facing to camera yaw (camera is the rotation authority on foot).
+        if self.player.in_vehicle.is_none() {
+            self.player.yaw = self.camera.yaw;
+        }
 
         // --- Shooting ---
         self.panic_pos = None;
@@ -441,7 +445,26 @@ impl Game {
             self.mission_target_idx = Some(self.peds.len() - 1);
         }
 
-        // --- Snapshot for interpolation ---
+        // --- NPC-vs-player separation (prevent overlap) ---
+        let pp = self.player.pos;
+        for ped in self.peds.iter_mut() {
+            if ped.dead() { continue; }
+            let d = vdist_xz(ped.pos, pp);
+            if d < 1.2 && d > 0.01 {
+                let push_dir = vnorm_xz(vsub(ped.pos, pp));
+                ped.pos.x += push_dir.x * (1.2 - d);
+                ped.pos.z += push_dir.z * (1.2 - d);
+            }
+        }
+        for cop in self.cops.iter_mut() {
+            if cop.dead() { continue; }
+            let d = vdist_xz(cop.pos, pp);
+            if d < 1.2 && d > 0.01 {
+                let push_dir = vnorm_xz(vsub(cop.pos, pp));
+                cop.pos.x += push_dir.x * (1.2 - d);
+                cop.pos.z += push_dir.z * (1.2 - d);
+            }
+        }
         self.player.snapshot();
         for v in self.vehicles.iter_mut() {
             v.snapshot();
