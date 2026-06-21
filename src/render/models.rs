@@ -342,35 +342,34 @@ pub fn draw_character(
         return;
     }
 
-    let body = Vector3 { x: pos.x, y: pos.y + 0.1, z: pos.z };
     let (sx, sz) = (yaw.sin(), yaw.cos());
 
     // --- 1. Torso (Shirt / Jacket) ---
-    let torso_pos = Vector3 { x: body.x, y: body.y + 0.15, z: body.z };
+    let torso_pos = Vector3 { x: pos.x, y: pos.y + 1.25, z: pos.z };
     d3.draw_model_ex(
         &assets.plain_cube_model,
         torso_pos,
         up, yaw_deg,
-        Vector3 { x: 0.5, y: 0.7, z: 0.26 },
+        Vector3 { x: 0.5, y: 0.8, z: 0.26 },
         color,
     );
 
     // --- 2. Pelvis / Pants top ---
-    let pelvis_pos = Vector3 { x: body.x, y: body.y - 0.22, z: body.z };
+    let pelvis_pos = Vector3 { x: pos.x, y: pos.y + 0.80, z: pos.z };
     d3.draw_model_ex(
         &assets.plain_cube_model,
         pelvis_pos,
         up, yaw_deg,
         Vector3 { x: 0.48, y: 0.12, z: 0.24 },
-        Color::new(45, 52, 85, 255), // Denim blue jeans
+        Color::new(45, 52, 85, 255), // Jeans
     );
 
     // --- 3. Head (Skin color) ---
-    let head_pos = Vector3 { x: body.x, y: body.y + 0.72, z: body.z };
+    let head_pos = Vector3 { x: pos.x, y: pos.y + 1.76, z: pos.z };
     d3.draw_sphere(
         head_pos,
         0.24,
-        Color::new(225, 185, 150, 255), // Skin tone
+        Color::new(225, 185, 150, 255),
     );
 
     // --- 4. Sunglasses (Cool GTA glasses) ---
@@ -384,11 +383,11 @@ pub fn draw_character(
         glasses_pos,
         up, yaw_deg,
         Vector3 { x: 0.32, y: 0.08, z: 0.1 },
-        Color::new(20, 20, 20, 255), // Dark lenses
+        Color::new(20, 20, 20, 255),
     );
 
     // --- 5. Cap (GTA baseball hat) ---
-    let cap_color = Color::new(200, 40, 40, 255); // Red cap
+    let cap_color = Color::new(200, 40, 40, 255);
     let cap_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.22, z: head_pos.z };
     d3.draw_model_ex(
         &assets.plain_cube_model,
@@ -399,7 +398,7 @@ pub fn draw_character(
     );
     let brim_pos = Vector3 {
         x: head_pos.x + sx * 0.18,
-        y: head_pos.y + 0.2,
+        y: head_pos.y + 0.20,
         z: head_pos.z + sz * 0.18,
     };
     d3.draw_model_ex(
@@ -411,7 +410,6 @@ pub fn draw_character(
     );
 
     // --- Animation logic ---
-    // Swing amplitude in meters (legs move forward/backward).
     let swing = if is_moving {
         (time * 12.0).sin() * 0.32
     } else {
@@ -419,58 +417,56 @@ pub fn draw_character(
     };
 
     // --- 6. Legs (Jeans) ---
-    // Pivot from pelvis. Local right is (-sz, 0, sx).
     let left_leg_pos = Vector3 {
-        x: body.x + 0.13 * sz + swing * sx,
-        y: body.y - 0.58,
-        z: body.z - 0.13 * sx + swing * sz,
+        x: pos.x + 0.13 * sz + swing * sx,
+        y: pos.y + 0.375,
+        z: pos.z - 0.13 * sx + swing * sz,
     };
     let right_leg_pos = Vector3 {
-        x: body.x - 0.13 * sz - swing * sx,
-        y: body.y - 0.58,
-        z: body.z + 0.13 * sx - swing * sz,
+        x: pos.x - 0.13 * sz - swing * sx,
+        y: pos.y + 0.375,
+        z: pos.z + 0.13 * sx - swing * sz,
     };
 
     d3.draw_model_ex(
         &assets.plain_cube_model,
         left_leg_pos,
         up, yaw_deg,
-        Vector3 { x: 0.18, y: 0.6, z: 0.2 },
+        Vector3 { x: 0.18, y: 0.75, z: 0.2 },
         Color::new(45, 52, 85, 255),
     );
     d3.draw_model_ex(
         &assets.plain_cube_model,
         right_leg_pos,
         up, yaw_deg,
-        Vector3 { x: 0.18, y: 0.6, z: 0.2 },
+        Vector3 { x: 0.18, y: 0.75, z: 0.2 },
         Color::new(45, 52, 85, 255),
     );
 
-    // --- 7. Arms (Shirt sleeves) ---
-    // Swing opposite to legs.
+    // --- 7. Arms ---
     let left_arm_pos = Vector3 {
-        x: body.x + 0.3 * sz - swing * 0.7 * sx,
-        y: body.y + 0.15,
-        z: body.z - 0.3 * sx - swing * 0.7 * sz,
+        x: pos.x + 0.3 * sz - swing * 0.7 * sx,
+        y: pos.y + 1.25,
+        z: pos.z - 0.3 * sx - swing * 0.7 * sz,
     };
     let right_arm_pos = Vector3 {
-        x: body.x - 0.3 * sz + swing * 0.7 * sx,
-        y: body.y + 0.15,
-        z: body.z + 0.3 * sx + swing * 0.7 * sz,
+        x: pos.x - 0.3 * sz + swing * 0.7 * sx,
+        y: pos.y + 1.25,
+        z: pos.z + 0.3 * sx + swing * 0.7 * sz,
     };
 
     d3.draw_model_ex(
         &assets.plain_cube_model,
         left_arm_pos,
         up, yaw_deg,
-        Vector3 { x: 0.14, y: 0.55, z: 0.16 },
+        Vector3 { x: 0.14, y: 0.65, z: 0.16 },
         color,
     );
     d3.draw_model_ex(
         &assets.plain_cube_model,
         right_arm_pos,
         up, yaw_deg,
-        Vector3 { x: 0.14, y: 0.55, z: 0.16 },
+        Vector3 { x: 0.14, y: 0.65, z: 0.16 },
         color,
     );
 }
