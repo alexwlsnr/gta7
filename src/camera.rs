@@ -36,10 +36,13 @@ impl FollowCamera {
         sensitivity: f32,
         dt: f32,
     ) {
-        // Orbit control via mouse (standard: mouse right = look right).
+        // Orbit control via mouse.
         self.yaw -= look_dx * sensitivity;
         self.pitch += look_dy * sensitivity;
-        self.pitch = clamp(self.pitch, 0.05, 1.3);
+
+        let is_car = player.in_vehicle.is_some();
+        // Clamping pitch: allow negative pitch (looking up) while keeping ground safety.
+        self.pitch = clamp(self.pitch, if is_car { -0.3 } else { -0.85 }, if is_car { 0.8 } else { 1.2 });
 
         let (pivot, pivot_yaw): (Vector3, f32) = if let Some(vi) = player.in_vehicle {
             let v = &vehicles[vi];
@@ -48,16 +51,16 @@ impl FollowCamera {
             (player.pos, player.yaw)
         };
 
-        if player.in_vehicle.is_some() {
+        if is_car {
             // Chase cam: lag behind vehicle heading.
             self.dist = 11.0;
-            self.height = 5.0;
+            self.height = 2.5; // base height at car level
             let target_yaw = pivot_yaw;
             self.yaw = lerp_angle(self.yaw, target_yaw, 3.0 * dt);
-            self.pitch = lerp(self.pitch, 0.35, 2.0 * dt);
+            self.pitch = lerp(self.pitch, 0.25, 2.0 * dt);
         } else {
             self.dist = 7.0;
-            self.height = 3.5;
+            self.height = 1.5; // base height at player chest level
         }
 
         // Spherical to cartesian offset — NEGATED XZ so camera is BEHIND the target.
@@ -70,16 +73,29 @@ impl FollowCamera {
             y: sp * self.dist + self.height,
             z: -cy * cp * self.dist,
         };
-        let desired = Vector3 {
+        let mut desired = Vector3 {
             x: pivot.x + offset.x,
             y: pivot.y + offset.y,
             z: pivot.z + offset.z,
         };
+        
+        // Ground safety: prevent camera from clipping underground.
+        desired.y = desired.y.max(0.4);
+
         // Smooth follow.
         self.pos = vlerp(self.pos, desired, 8.0 * dt);
+
+        // Dynamic target shifting: shift look target vertically in the opposite direction
+        // of the camera pitch to allow looking straight up at the sky or down at the ground.
+        let target_offset_y = if is_car {
+            1.2 - self.pitch * 2.0
+        } else {
+            1.5 - self.pitch * 3.5 + player.recoil
+        };
+
         self.target = vlerp(self.target, Vector3 {
             x: pivot.x,
-            y: pivot.y + 1.5 + player.recoil,
+            y: pivot.y + target_offset_y,
             z: pivot.z,
         }, 10.0 * dt);
     }
