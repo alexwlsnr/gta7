@@ -5,3 +5,5 @@ pub mod input;
 pub mod world;
 pub mod render;
 pub mod player;
+pub mod vehicle;
+pub mod camera;
