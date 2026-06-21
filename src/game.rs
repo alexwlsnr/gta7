@@ -571,21 +571,24 @@ impl<'a> Game<'a> {
             for ped in &self.peds {
                 let rp = ped.render_pos(alpha);
                 let ry = ped.render_yaw(alpha);
-                draw_character(&mut d3, &self.assets, rp, ry, ped.color, ped.dead());
+                let is_moving = !ped.dead();
+                draw_character(&mut d3, &self.assets, rp, ry, ped.color, ped.dead(), self.time, is_moving);
             }
 
             // Cops (blue uniform).
             for cop in &self.cops {
                 let rp = cop.render_pos(alpha);
                 let ry = cop.render_yaw(alpha);
-                draw_character(&mut d3, &self.assets, rp, ry, Color::new(40, 60, 140, 255), cop.dead());
+                let is_moving = !cop.dead() && cop.state == crate::ai::cop::CopState::Chase;
+                draw_character(&mut d3, &self.assets, rp, ry, Color::new(30, 45, 110, 255), cop.dead(), self.time, is_moving);
             }
 
             // Player (only if on foot and alive).
             if self.player.in_vehicle.is_none() && self.player.alive {
                 let rp = self.player.render_pos(alpha);
                 let ry = self.player.render_yaw(alpha);
-                draw_character(&mut d3, &self.assets, rp, ry, Color::new(60, 180, 80, 255), !self.player.alive);
+                let is_moving = vlen_xz(self.player.vel) > 0.1;
+                draw_character(&mut d3, &self.assets, rp, ry, Color::new(60, 180, 80, 255), !self.player.alive, self.time, is_moving);
             }
 
             // FX.

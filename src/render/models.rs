@@ -315,12 +315,23 @@ pub fn draw_car(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3, yaw: 
 }
 
 /// Draw a humanoid character: capsule body + head, tinted by `color`.
-/// Now takes Assets to draw rotated parts via draw_model_ex.
-pub fn draw_character(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3, yaw: f32, color: Color, dead: bool) {
+/// Now takes Assets to draw rotated parts via draw_model_ex, plus time and movement
+/// animation variables to swing arms and legs.
+pub fn draw_character(
+    d3: &mut impl RaylibDraw3D,
+    assets: &Assets,
+    pos: Vector3,
+    yaw: f32,
+    color: Color,
+    dead: bool,
+    time: f32,
+    is_moving: bool,
+) {
     let up = Vector3 { x: 0.0, y: 1.0, z: 0.0 };
     let yaw_deg = yaw.to_degrees();
+    
     if dead {
-        // Lying down: flat rotated box.
+        // Lying down: flat rotated box (darkened color).
         d3.draw_model_ex(
             &assets.plain_cube_model,
             Vector3 { x: pos.x, y: 0.2, z: pos.z },
@@ -330,46 +341,137 @@ pub fn draw_character(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3,
         );
         return;
     }
-    let body = Vector3 { x: pos.x, y: pos.y + 0.1, z: pos.z };
-    // Torso (cylinder is rotationally symmetric, so simple draw is fine).
-    d3.draw_cylinder(body, 0.35, 0.35, 1.0, 8, color);
-    // Head.
-    d3.draw_sphere(
-        Vector3 { x: body.x, y: body.y + 0.75, z: body.z },
-        0.28,
-        Color::new(220, 180, 150, 255),
-    );
-    let (sx, sz) = (yaw.sin(), yaw.cos());
-    // Facing indicator (nose).
-    let nub = Vector3 { x: body.x + sx * 0.3, y: body.y + 0.2, z: body.z + sz * 0.3 };
-    d3.draw_cube(nub, 0.2, 0.2, 0.2, Color::new(30, 30, 40, 255));
 
-    // Legs: rotated relative to character's facing direction.
-    // Local right axis in screen coordinates is (-sz, 0, sx).
+    let body = Vector3 { x: pos.x, y: pos.y + 0.1, z: pos.z };
+    let (sx, sz) = (yaw.sin(), yaw.cos());
+
+    // --- 1. Torso (Shirt / Jacket) ---
+    let torso_pos = Vector3 { x: body.x, y: body.y + 0.15, z: body.z };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        torso_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.5, y: 0.7, z: 0.26 },
+        color,
+    );
+
+    // --- 2. Pelvis / Pants top ---
+    let pelvis_pos = Vector3 { x: body.x, y: body.y - 0.22, z: body.z };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        pelvis_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.48, y: 0.12, z: 0.24 },
+        Color::new(45, 52, 85, 255), // Denim blue jeans
+    );
+
+    // --- 3. Head (Skin color) ---
+    let head_pos = Vector3 { x: body.x, y: body.y + 0.72, z: body.z };
+    d3.draw_sphere(
+        head_pos,
+        0.24,
+        Color::new(225, 185, 150, 255), // Skin tone
+    );
+
+    // --- 4. Sunglasses (Cool GTA glasses) ---
+    let glasses_pos = Vector3 {
+        x: head_pos.x + sx * 0.18,
+        y: head_pos.y + 0.05,
+        z: head_pos.z + sz * 0.18,
+    };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        glasses_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.32, y: 0.08, z: 0.1 },
+        Color::new(20, 20, 20, 255), // Dark lenses
+    );
+
+    // --- 5. Cap (GTA baseball hat) ---
+    let cap_color = Color::new(200, 40, 40, 255); // Red cap
+    let cap_pos = Vector3 { x: head_pos.x, y: head_pos.y + 0.22, z: head_pos.z };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        cap_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.28, y: 0.1, z: 0.28 },
+        cap_color,
+    );
+    let brim_pos = Vector3 {
+        x: head_pos.x + sx * 0.18,
+        y: head_pos.y + 0.2,
+        z: head_pos.z + sz * 0.18,
+    };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        brim_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.24, y: 0.02, z: 0.18 },
+        cap_color,
+    );
+
+    // --- Animation logic ---
+    // Swing amplitude in meters (legs move forward/backward).
+    let swing = if is_moving {
+        (time * 12.0).sin() * 0.32
+    } else {
+        0.0
+    };
+
+    // --- 6. Legs (Jeans) ---
+    // Pivot from pelvis. Local right is (-sz, 0, sx).
     let left_leg_pos = Vector3 {
-        x: body.x + 0.15 * sz,
-        y: body.y - 0.7,
-        z: body.z - 0.15 * sx,
+        x: body.x + 0.13 * sz + swing * sx,
+        y: body.y - 0.58,
+        z: body.z - 0.13 * sx + swing * sz,
     };
     let right_leg_pos = Vector3 {
-        x: body.x - 0.15 * sz,
-        y: body.y - 0.7,
-        z: body.z + 0.15 * sx,
+        x: body.x - 0.13 * sz - swing * sx,
+        y: body.y - 0.58,
+        z: body.z + 0.13 * sx - swing * sz,
     };
 
     d3.draw_model_ex(
         &assets.plain_cube_model,
         left_leg_pos,
         up, yaw_deg,
-        Vector3 { x: 0.2, y: 0.8, z: 0.25 },
-        Color::new(40, 45, 70, 255),
+        Vector3 { x: 0.18, y: 0.6, z: 0.2 },
+        Color::new(45, 52, 85, 255),
     );
     d3.draw_model_ex(
         &assets.plain_cube_model,
         right_leg_pos,
         up, yaw_deg,
-        Vector3 { x: 0.2, y: 0.8, z: 0.25 },
-        Color::new(40, 45, 70, 255),
+        Vector3 { x: 0.18, y: 0.6, z: 0.2 },
+        Color::new(45, 52, 85, 255),
+    );
+
+    // --- 7. Arms (Shirt sleeves) ---
+    // Swing opposite to legs.
+    let left_arm_pos = Vector3 {
+        x: body.x + 0.3 * sz - swing * 0.7 * sx,
+        y: body.y + 0.15,
+        z: body.z - 0.3 * sx - swing * 0.7 * sz,
+    };
+    let right_arm_pos = Vector3 {
+        x: body.x - 0.3 * sz + swing * 0.7 * sx,
+        y: body.y + 0.15,
+        z: body.z + 0.3 * sx + swing * 0.7 * sz,
+    };
+
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        left_arm_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.14, y: 0.55, z: 0.16 },
+        color,
+    );
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        right_arm_pos,
+        up, yaw_deg,
+        Vector3 { x: 0.14, y: 0.55, z: 0.16 },
+        color,
     );
 }
 
