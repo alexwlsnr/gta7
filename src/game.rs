@@ -133,6 +133,8 @@ impl<'a> Game<'a> {
         // Start first mission.
         let mut mission = MissionState::new();
         mission.start_new(player_pos, cfg.world_half());
+        // Start the day at 13:00 so the first impression is bright daylight.
+        let initial_time = 13.0 / cfg.time_scale;
 
         Game {
             cfg,
@@ -149,7 +151,7 @@ impl<'a> Game<'a> {
             mission,
             fx: Fx::new(),
             camera: FollowCamera::new(),
-            time: 0.0,
+            time: initial_time,
             panic_pos: None,
             mission_target_idx: None,
             look_accum_x: 0.0,

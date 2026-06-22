@@ -15,8 +15,9 @@ use crate::mathx::{vadd, vsub, vscale};
 /// the `Model`s hold raw pointers to them — they must outlive the models.
 pub struct Assets {
     pub building_model: Model,   // unit cube with window texture
-    pub plain_cube_model: Model, // unit cube, no texture (for car bodies)
+    pub plain_cube_model: Model, // unit cube, lit via shader with a 1x1 white albedo texture
     pub window_tex: Texture2D,
+    pub white_tex: Texture2D,
     pub ground_model: Model,     // large plane with ground texture
     pub ground_tex: Texture2D,
     pub road_tex: Texture2D,     // for HUD minimap
@@ -85,15 +86,23 @@ impl Assets {
         ground_model
             .materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &ground_tex);
-        // --- Plain cube model (for car bodies, no texture) ---
+
+        // --- Plain cube model (for car bodies, character parts) ---
+        // Give it a 1x1 white albedo texture so the lighting shader's texture0
+        // sample multiplies by white instead of black. Tint comes from colDiffuse.
+        let white = Image::gen_image_color(1, 1, Color::WHITE);
+        let white_tex = rl.load_texture_from_image(thread, &white).unwrap();
         let pc_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
         let pc_weak = unsafe { pc_mesh.make_weak() };
-        let plain_cube_model = rl.load_model_from_mesh(thread, pc_weak).unwrap();
-
+        let mut plain_cube_model = rl.load_model_from_mesh(thread, pc_weak).unwrap();
+        plain_cube_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &white_tex);
         Assets {
             building_model,
             plain_cube_model,
             window_tex,
+            white_tex,
             ground_model,
             ground_tex,
             road_tex,

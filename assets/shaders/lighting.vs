@@ -4,12 +4,10 @@ in vec3 vertexPosition;
 in vec2 vertexTexCoord;
 in vec3 vertexNormal;
 
-// Automatically set by raylib.
 uniform mat4 mvp;
 uniform mat4 matModel;
 uniform vec4 colDiffuse;
 
-// Custom uniforms set from Rust.
 uniform mat4 lightSpaceMatrix;
 
 out vec3 fragWorldPos;
