@@ -106,10 +106,59 @@ pub fn draw_hud(
         }
     }
 
-    // --- Bottom-right: minimap ---
+    // --- Bottom-right: minimap & Speedometer ---
     let mm_size = 160;
     let mm_x = sw - mm_size - 20;
     let mm_y = sh - mm_size - 20;
+
+    // Speedometer (only when in vehicle)
+    if let Some(vi) = player.in_vehicle {
+        if let Some(car) = vehicles.get(vi) {
+            let speed_mph = (car.speed.abs() * 2.237) as i32;
+            let speedo_y = mm_y - 45;
+            let speedo_w = mm_size;
+            let speedo_h = 36;
+            let speedo_x = mm_x;
+
+            // Semi-transparent background panel
+            d.draw_rectangle(speedo_x, speedo_y, speedo_w, speedo_h, Color::new(15, 15, 25, 200));
+            // Cyan border if boosting, gray otherwise
+            let border_color = if car.nitro_active {
+                Color::new(0, 220, 255, 200)
+            } else {
+                Color::new(120, 120, 140, 150)
+            };
+            d.draw_rectangle_lines(speedo_x, speedo_y, speedo_w, speedo_h, border_color);
+
+            // Speed values
+            let speed_str = format!("{:03}", speed_mph);
+            let unit_str = "MPH";
+            
+            let text_y = speedo_y + 8;
+            d.draw_text(&speed_str, speedo_x + 12, text_y, 22, Color::WHITE);
+            d.draw_text(unit_str, speedo_x + 65, text_y + 4, 14, Color::new(180, 180, 200, 220));
+
+            // Horizontal speed LED bar
+            let bar_start_x = speedo_x + 105;
+            let bar_y = speedo_y + 14;
+            let bar_max_w = speedo_w - 115;
+            let bar_h = 8;
+            
+            d.draw_rectangle(bar_start_x, bar_y, bar_max_w, bar_h, Color::new(30, 30, 40, 255));
+            let speed_ratio = (car.speed.abs() / 48.0).clamp(0.0, 1.0);
+            let bar_fill_w = (speed_ratio * bar_max_w as f32) as i32;
+            let bar_color = if car.nitro_active {
+                Color::new(0, 220, 255, 255)
+            } else if speed_ratio > 0.8 {
+                Color::new(255, 100, 100, 255)
+            } else {
+                Color::new(80, 220, 80, 255)
+            };
+            d.draw_rectangle(bar_start_x, bar_y, bar_fill_w, bar_h, bar_color);
+            d.draw_rectangle_lines(bar_start_x, bar_y, bar_max_w, bar_h, Color::new(100, 100, 100, 255));
+        }
+    }
+
     draw_minimap(d, city, cam_pos, cam_yaw, vehicles, player, mm_x, mm_y, mm_size, cfg);
 
     // --- Mission banner (top-center) ---
