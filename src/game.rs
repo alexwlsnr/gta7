@@ -16,7 +16,7 @@ use crate::ai::cop::Cop;
 use crate::ai::traffic::{TrafficCar, spawn_traffic};
 use crate::pickup::{Pickup, Shop, ShopKind};
 use crate::mission::MissionState;
-use crate::render::models::{Assets, draw_world, draw_car, draw_character, draw_pickup, draw_mission_marker};
+use crate::render::models::{Assets, draw_world, draw_car, draw_character, draw_pickup, draw_mission_marker, draw_shadow_casters};
 use crate::render::fx::Fx;
 use crate::hud;
 
@@ -44,6 +44,7 @@ pub struct Game<'a> {
     pub quit: bool,
     pub pending_fullscreen: bool,
     pub sfx: crate::sound::SoundEffects<'a>,
+    pub lighting: crate::render::lighting::LightingSystem,
 }
 
 impl<'a> Game<'a> {
@@ -53,6 +54,8 @@ impl<'a> Game<'a> {
         let mut sfx = crate::sound::SoundEffects::load(audio);
         sfx.set_sfx_volume(cfg.sfx_volume);
         sfx.set_music_volume(cfg.music_volume);
+
+        let lighting = crate::render::lighting::LightingSystem::load(rl, thread);
         sfx.start_radio();
 
         // Player at center on a road.
@@ -153,6 +156,7 @@ impl<'a> Game<'a> {
             paused: false,
             quit: false,
             pending_fullscreen: false,
+            lighting,
             sfx,
         }
     }
@@ -783,11 +787,42 @@ impl<'a> Game<'a> {
             }
         }
 
+        // --- Shadow Pass ---
+        // Render shadow-casting geometry to the shadow map BEFORE the main draw
+        // frame. `begin_texture_mode` and `begin_drawing` both borrow `rl`
+        // mutably, so the shadow pass must complete (RAII drop) before the main
+        // pass begins.
+        let total_hours = (self.time * self.cfg.time_scale).rem_euclid(24.0);
+        let player_pos = self.player.pos;
+        self.lighting.prepare_shadow(player_pos, total_hours);
+        // Snapshot the shadow camera (a Copy) before borrowing `shadow_map` —
+        // `shadow_camera()` borrows &self.lighting, which would conflict with
+        // the mutable `shadow_map` borrow held by the texture-mode guard below.
+        let shadow_cam = self.lighting.shadow_camera();
+        {
+            let mut dt = rl.begin_texture_mode(thread, &mut self.lighting.shadow_map);
+            dt.clear_background(Color::new(255, 255, 255, 255));
+            let mut d3 = dt.begin_mode3D(shadow_cam);
+            {
+                let mut d3s = d3.begin_shader_mode(&mut self.lighting.depth_shader);
+                draw_shadow_casters(
+                    &mut d3s,
+                    &self.city,
+                    &self.assets,
+                    &self.cfg,
+                    &self.vehicles,
+                    &self.peds,
+                    &self.cops,
+                    &self.player,
+                );
+            }
+        }
+
         let mut d = rl.begin_drawing(thread);
         // Clear color + depth buffer (depth clear is essential — without it 3D
         // geometry fails the depth test against stale values and renders nothing).
-        // Day/night sky colors computed from game time.
-        let total_hours = (self.time * self.cfg.time_scale).rem_euclid(24.0);
+        // Day/night sky colors computed from game time (total_hours set above
+        // for the shadow pass).
         let (sky_top, sky_bottom) = crate::config::sky_colors_for_hour(total_hours);
         d.clear_background(sky_bottom);
         let sh = d.get_screen_height();
@@ -802,27 +837,33 @@ impl<'a> Game<'a> {
             d.draw_rectangle(0, y, d.get_screen_width(), 2, c);
         }
 
-        // 3D scene.
+        // Update lit shader uniforms for this frame (sun direction, color, fog,
+        // shadow matrix). Must happen before entering shader mode so the values
+        // are set on the shader object itself.
+        self.lighting.update_uniforms(total_hours, sky_bottom, cam_pos);
+
+        // 3D scene (lit pass — all 3D draws go through the lit shader).
         {
             let mut d3 = d.begin_mode3D(cam);
+            let mut d3s = d3.begin_shader_mode(&mut self.lighting.lit_shader);
             // World.
-            draw_world(&mut d3, &self.city, &self.assets, &self.cfg);
+            draw_world(&mut d3s, &self.city, &self.assets, &self.cfg);
 
             // Pickups.
             for p in &self.pickups {
                 if p.active {
-                    draw_pickup(&mut d3, p.pos, p.color(), self.time);
+                    draw_pickup(&mut d3s, p.pos, p.color(), self.time);
                 }
             }
 
             // Mission marker.
             if self.mission.has_active_marker() {
-                draw_mission_marker(&mut d3, self.mission.marker, Color::new(255, 80, 255, 255), self.time);
+                draw_mission_marker(&mut d3s, self.mission.marker, Color::new(255, 80, 255, 255), self.time);
             }
 
             // Shop markers.
             for shop in &self.shops {
-                draw_mission_marker(&mut d3, shop.pos, Color::new(80, 200, 255, 255), self.time + 1.5);
+                draw_mission_marker(&mut d3s, shop.pos, Color::new(80, 200, 255, 255), self.time + 1.5);
             }
 
             // Vehicles.
@@ -832,7 +873,7 @@ impl<'a> Game<'a> {
                 let rp_pitch = v.render_pitch(alpha);
                 let rp_roll = v.render_roll(alpha);
                 draw_car(
-                    &mut d3,
+                    &mut d3s,
                     &self.assets,
                     rp,
                     ry,
@@ -849,7 +890,7 @@ impl<'a> Game<'a> {
                 let ry = ped.render_yaw(alpha);
                 let is_moving = !ped.dead();
                 draw_character(
-                    &mut d3,
+                    &mut d3s,
                     &self.assets,
                     rp,
                     ry,
@@ -870,7 +911,7 @@ impl<'a> Game<'a> {
                 let ry = cop.render_yaw(alpha);
                 let is_moving = !cop.dead() && cop.state == crate::ai::cop::CopState::Chase;
                 draw_character(
-                    &mut d3,
+                    &mut d3s,
                     &self.assets,
                     rp,
                     ry,
@@ -891,7 +932,7 @@ impl<'a> Game<'a> {
                 let ry = self.player.render_yaw(alpha);
                 let is_moving = vlen_xz(self.player.vel) > 0.1;
                 draw_character(
-                    &mut d3,
+                    &mut d3s,
                     &self.assets,
                     rp,
                     ry,
@@ -907,7 +948,7 @@ impl<'a> Game<'a> {
             }
 
             // FX.
-            self.fx.draw(&mut d3);
+            self.fx.draw(&mut d3s);
         }
 
         // HUD (2D).

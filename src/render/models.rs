@@ -5,6 +5,10 @@ use raylib::consts::MaterialMapIndex;
 
 use crate::config::Config;
 use crate::world::city::{Building, City, Axis};
+use crate::vehicle::Vehicle;
+use crate::ai::ped::Ped;
+use crate::ai::cop::Cop;
+use crate::player::Player;
 use crate::mathx::{vadd, vsub, vscale};
 
 /// Cached GPU assets built once at startup. Textures are kept as fields because
@@ -686,6 +690,63 @@ pub fn draw_mission_marker(d3: &mut impl RaylibDraw3D, pos: Vector3, color: Colo
         1.2 * pulse, 1.2 * pulse, 4.0, 16,
         Color::new(color.r, color.g, color.b, 80),
     );
+}
+
+/// Draw all shadow-casting geometry for the shadow map pass.
+///
+/// Renders simplified boxes for buildings, vehicles, and characters. Everything
+/// is drawn white — the depth shader only cares about depth, not color. Called
+/// inside the shadow map's render-texture mode with the depth shader active.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_shadow_casters(
+    d3: &mut impl RaylibDraw3D,
+    city: &City,
+    _assets: &Assets,
+    _cfg: &Config,
+    vehicles: &[Vehicle],
+    peds: &[Ped],
+    cops: &[Cop],
+    player: &Player,
+) {
+    // Buildings.
+    for b in &city.buildings {
+        let c = b.box3d.center();
+        let h = b.box3d.half();
+        d3.draw_cube(c, h.x * 2.0, h.y * 2.0, h.z * 2.0, Color::WHITE);
+    }
+    // Vehicles (simple boxes for shadow).
+    for v in vehicles {
+        if v.destroyed {
+            continue;
+        }
+        d3.draw_cube(v.pos, 2.0, 0.8, 4.2, Color::WHITE);
+    }
+    // Characters (simple boxes for shadow).
+    for ped in peds {
+        if ped.dead() {
+            continue;
+        }
+        d3.draw_cube(
+            Vector3 { x: ped.pos.x, y: ped.pos.y + 0.9, z: ped.pos.z },
+            0.4, 1.8, 0.4, Color::WHITE,
+        );
+    }
+    for cop in cops {
+        if cop.dead() {
+            continue;
+        }
+        d3.draw_cube(
+            Vector3 { x: cop.pos.x, y: cop.pos.y + 0.9, z: cop.pos.z },
+            0.4, 1.8, 0.4, Color::WHITE,
+        );
+    }
+    // Player.
+    if player.alive {
+        d3.draw_cube(
+            Vector3 { x: player.pos.x, y: player.pos.y + 0.9, z: player.pos.z },
+            0.4, 1.8, 0.4, Color::WHITE,
+        );
+    }
 }
 
 // --- Quaternion Math Helpers for 3D Rotations ---
