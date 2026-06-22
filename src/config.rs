@@ -1,4 +1,5 @@
 //! Game configuration and runtime settings.
+use raylib::ffi::Vector3;
 use raylib::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -157,6 +158,65 @@ pub fn format_game_time(time: f32, time_scale: f32) -> String {
     format!("{:02}:{:02}", hours, minutes)
 }
 
+/// Compute the sun direction (normalized vector pointing FROM the sun toward the scene)
+/// for a given hour (0..24). At noon the sun is overhead, so the light direction points
+/// down (negative Y). At night the direction flips upward (moonlight from below horizon).
+pub fn sun_direction(hour: f32) -> Vector3 {
+    let h = hour.rem_euclid(24.0);
+    // Sun elevation angle: sunrise at 6h (angle 0), noon at 12h (angle PI/2, highest),
+    // sunset at 18h (angle PI). Full cycle wraps over 24h.
+    let angle = ((h - 6.0) / 24.0) * std::f32::consts::TAU;
+    // Sun position on the arc: X sweeps east(-)→west(+), Y is elevation (positive = above).
+    let px = angle.cos();
+    let py = angle.sin();
+    // Slight tilt so shadows aren't purely along one axis.
+    let z = 0.3;
+    // Direction FROM the sun TOWARD the scene = inverse of the sun's position direction.
+    let x = -px;
+    let y = -py;
+    let len = (x * x + y * y + z * z).sqrt();
+    Vector3 { x: x / len, y: y / len, z: z / len }
+}
+
+/// Compute the sun/moon light color for a given hour.
+/// Warm at dawn/dusk, bright white at noon, dim cool moonlight at night.
+pub fn sun_color(hour: f32) -> Color {
+    let h = hour.rem_euclid(24.0);
+    let keyframes: [(f32, Color); 6] = [
+        (0.0,  Color::new(30, 35, 55, 255)),    // midnight — dim moonlight
+        (6.0,  Color::new(120, 80, 60, 255)),   // pre-dawn — dim warm
+        (7.5,  Color::new(255, 180, 120, 255)), // dawn — warm orange
+        (13.0, Color::new(255, 250, 235, 255)), // noon — bright white
+        (18.5, Color::new(255, 160, 90, 255)),  // dusk — warm orange
+        (24.0, Color::new(30, 35, 55, 255)),    // wraps to midnight
+    ];
+    let mut i = 0;
+    while i < keyframes.len() - 1 && keyframes[i + 1].0 <= h {
+        i += 1;
+    }
+    let (t0, c0) = keyframes[i];
+    let (t1, c1) = keyframes[i + 1];
+    let t = if t1 > t0 { (h - t0) / (t1 - t0) } else { 0.0 };
+    Color::new(
+        (c0.r as f32 + (c1.r as f32 - c0.r as f32) * t) as u8,
+        (c0.g as f32 + (c1.g as f32 - c0.g as f32) * t) as u8,
+        (c0.b as f32 + (c1.b as f32 - c0.b as f32) * t) as u8,
+        255,
+    )
+}
+
+/// Compute the sun's world position for shadow camera placement.
+/// `dir` = sun direction (from `sun_direction`). `player_pos` = camera target.
+/// The sun is placed far along the inverse of the light direction.
+pub fn sun_position(dir: Vector3, player_pos: Vector3) -> Vector3 {
+    // Sun is 200 units away in the opposite direction of the light.
+    Vector3 {
+        x: player_pos.x - dir.x * 200.0,
+        y: player_pos.y - dir.y * 200.0,
+        z: player_pos.z - dir.z * 200.0,
+    }
+}
+
 pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Color {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let h60 = h / 60.0;
@@ -176,4 +236,46 @@ pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Color {
         ((b + m) * 255.0) as u8,
         255,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use raylib::ffi::Vector3;
+
+    #[test]
+    fn sun_direction_at_noon_is_downward() {
+        let dir = sun_direction(13.0);
+        // At noon (13h), sun should be roughly overhead — direction pointing down.
+        assert!(dir.y < -0.5, "sun should point downward at noon, got y={}", dir.y);
+    }
+
+    #[test]
+    fn sun_direction_at_midnight_is_dim() {
+        let dir = sun_direction(0.0);
+        // At midnight, sun is below horizon — direction pointing up (moonlight from below).
+        assert!(dir.y > 0.0, "sun should point upward at midnight (below horizon), got y={}", dir.y);
+    }
+
+    #[test]
+    fn sun_color_at_noon_is_bright() {
+        let col = sun_color(13.0);
+        assert!(col.r > 200 && col.g > 200 && col.b > 180,
+            "noon sun should be bright white, got {:?}", col);
+    }
+
+    #[test]
+    fn sun_color_at_dusk_is_warm() {
+        let col = sun_color(18.5);
+        // Dusk should be warm — more red than blue.
+        assert!(col.r > col.b, "dusk sun should be warmer (r > b), got r={} b={}", col.r, col.b);
+    }
+
+    #[test]
+    fn sun_color_at_night_is_dim() {
+        let col = sun_color(0.0);
+        // Night sun (moonlight) should be very dim.
+        assert!(col.r < 80 && col.g < 80 && col.b < 100,
+            "night sun should be dim, got {:?}", col);
+    }
 }
