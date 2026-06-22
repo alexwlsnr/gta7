@@ -19,7 +19,7 @@ pub struct LightingSystem {
     loc_shadow_map: i32,
     loc_light_space: i32,
     // Cached uniform locations for depth shader.
-    loc_depth_mvp: i32,
+    pub loc_depth_mvp: i32,
     // Current light space matrix (updated each frame).
     light_space: Matrix,
 }
@@ -100,14 +100,10 @@ impl LightingSystem {
         proj * view
     }
 
-    /// Begin the shadow map render pass. Call before rendering shadow casters.
-    pub fn begin_shadow_pass(
-        &mut self,
-        rl: &mut RaylibHandle,
-        thread: &RaylibThread,
-        player_pos: Vector3,
-        hour: f32,
-    ) {
+    /// Prepare the shadow pass: update the shadow camera and recompute the light
+    /// space matrix. Does NOT enter render-texture mode — the caller owns that
+    /// RAII guard so shadow casters can be drawn while the shadow map is active.
+    pub fn prepare_shadow(&mut self, player_pos: Vector3, hour: f32) {
         let sun_pos = sun_position(hour, player_pos);
 
         // Update shadow camera to follow player, positioned at sun.
@@ -116,21 +112,11 @@ impl LightingSystem {
 
         // Compute and store light space matrix.
         self.light_space = self.compute_light_space_matrix();
-
-        // Begin rendering to shadow map.
-        let mut d = rl.begin_texture_mode(thread, &mut self.shadow_map);
-        d.clear_background(Color::new(255, 255, 255, 255)); // Far = white (no shadow).
-
-        // Set up depth shader.
-        let mvp = self.light_space * Matrix::identity();
-        self.depth_shader
-            .set_shader_value_matrix(self.loc_depth_mvp, mvp);
     }
 
-    /// End the shadow map render pass.
-    pub fn end_shadow_pass(&self) {
-        // RAII guard handles this automatically when `d` drops.
-        // This function is a no-op placeholder for API symmetry.
+    /// Returns the shadow camera for the caller to use in `begin_mode3D`.
+    pub fn shadow_camera(&self) -> Camera3D {
+        self.shadow_camera
     }
 
     /// Update lighting uniforms for the current frame.
