@@ -135,13 +135,21 @@ impl LightingSystem {
                 z: sun_col.b as f32 / 255.0,
             },
         );
-        // Ambient = sky bottom color (dimmed).
+        // Ambient = sky bottom color, dimmed more at night.
+        let h = hour.rem_euclid(24.0);
+        let ambient_mult = if h < 6.0 || h > 20.0 {
+            0.2 // Night: low ambient
+        } else if h < 8.0 || h > 18.0 {
+            0.3 // Dawn/dusk
+        } else {
+            0.45 // Day: brighter ambient
+        };
         self.lit_shader.set_shader_value(
             self.loc_ambient_color,
             Vector3 {
-                x: sky_bottom.r as f32 / 255.0 * 0.4,
-                y: sky_bottom.g as f32 / 255.0 * 0.4,
-                z: sky_bottom.b as f32 / 255.0 * 0.4,
+                x: sky_bottom.r as f32 / 255.0 * ambient_mult,
+                y: sky_bottom.g as f32 / 255.0 * ambient_mult,
+                z: sky_bottom.b as f32 / 255.0 * ambient_mult,
             },
         );
         // Fog color = sky bottom.
@@ -155,8 +163,13 @@ impl LightingSystem {
         );
         // Fog density: higher at night for atmosphere.
         let h = hour.rem_euclid(24.0);
-        let is_night = h < 6.0 || h > 20.0;
-        let density: f32 = if is_night { 0.012 } else { 0.006 };
+        let density: f32 = if h < 6.0 || h > 20.0 {
+            0.015 // Night: thicker fog
+        } else if h < 8.0 || h > 18.0 {
+            0.010 // Dawn/dusk: moderate
+        } else {
+            0.005 // Day: light fog
+        };
         self.lit_shader
             .set_shader_value(self.loc_fog_density, density);
         // Camera position for fog distance.
