@@ -6,7 +6,6 @@ in vec3 fragNormal;
 in vec4 fragLightSpacePos;
 in vec4 fragColor;
 
-// Custom uniforms set manually from Rust.
 uniform vec3 u_lightDir;
 uniform vec3 u_lightColor;
 uniform vec3 u_ambientColor;
@@ -14,52 +13,49 @@ uniform vec3 u_fogColor;
 uniform float u_fogDensity;
 uniform vec3 u_cameraPos;
 uniform sampler2D u_shadowMap;
-
-// texture0 is automatically bound by raylib.
 uniform sampler2D texture0;
 
 out vec4 finalColor;
 
 float compute_shadow() {
-    // Perspective divide.
     vec3 projCoords = fragLightSpacePos.xyz / fragLightSpacePos.w;
     projCoords = projCoords * 0.5 + 0.5;
-    // Outside shadow map bounds — no shadow.
     if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0 ||
         projCoords.z > 1.0) {
-        return 1.0; // fully lit
+        return 1.0;
     }
     float closestDepth = texture(u_shadowMap, projCoords.xy).r;
     float currentDepth = projCoords.z;
-    // Shadow bias to prevent acne.
     float bias = 0.005;
-    return currentDepth - bias < closestDepth ? 1.0 : 0.4;
+    return currentDepth - bias < closestDepth ? 1.0 : 0.5;
 }
 
 void main() {
-    // Sample texture (raylib binds texture0 automatically).
+    // Base color from texture and diffuse color.
     vec4 texColor = texture(texture0, fragTexCoord);
-    // Use the vertex shader's colDiffuse as the base color.
     vec3 baseColor = texColor.rgb * fragColor.rgb;
 
-    // Normalize vectors.
-    vec3 normal = normalize(fragNormal);
+    // Normalize, with fallback for degenerate normals.
+    vec3 normal = fragNormal;
+    float nlen = length(normal);
+    if (nlen > 0.001) {
+        normal = normal / nlen;
+    } else {
+        normal = vec3(0.0, 1.0, 0.0);
+    }
     vec3 lightDir = normalize(-u_lightDir);
 
-    // Diffuse lighting.
+    // Half-Lambert wrap lighting for soft shadows on all faces.
     float diff = max(dot(normal, lightDir), 0.0);
-    // Soft wrap so back faces aren't fully dark.
     float wrap = max(dot(normal, lightDir) * 0.5 + 0.5, 0.0);
     wrap = wrap * wrap;
 
-    // Shadow factor.
     float shadow = compute_shadow();
 
-    // Combine: ambient + (diffuse * shadow * light color).
     vec3 ambient = u_ambientColor * baseColor;
     vec3 diffuse = u_lightColor * baseColor * diff * shadow;
-    vec3 fill = u_ambientColor * baseColor * wrap * 0.5;
+    vec3 fill = u_ambientColor * baseColor * wrap * 0.3;
     vec3 lit = ambient + diffuse + fill;
 
     // Exponential fog.

@@ -88,6 +88,15 @@ impl LightingSystem {
         }
     }
 
+    /// Set the lit shader on model materials so draw_model/draw_model_ex use it.
+    /// This avoids begin_shader_mode (which breaks immediate-mode draws).
+    pub fn apply_to_materials(&self, assets: &mut crate::render::models::Assets) {
+        use raylib::core::models::RaylibMaterial;
+        assets.building_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.ground_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.plain_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
+    }
+
     /// Compute the light space matrix (view + projection) for shadow mapping.
     fn compute_light_space_matrix(&self) -> Matrix {
         let view = Matrix::look_at(

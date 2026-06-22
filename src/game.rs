@@ -50,12 +50,13 @@ pub struct Game<'a> {
 impl<'a> Game<'a> {
     pub fn new(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: Config, audio: &'a RaylibAudio) -> Self {
         let city = City::generate(&cfg);
-        let assets = Assets::load(rl, thread, &cfg);
+        let mut assets = Assets::load(rl, thread, &cfg);
         let mut sfx = crate::sound::SoundEffects::load(audio);
         sfx.set_sfx_volume(cfg.sfx_volume);
         sfx.set_music_volume(cfg.music_volume);
 
         let lighting = crate::render::lighting::LightingSystem::load(rl, thread);
+        lighting.apply_to_materials(&mut assets);
         sfx.start_radio();
 
         // Player at center on a road.
@@ -841,29 +842,28 @@ impl<'a> Game<'a> {
         // shadow matrix). Must happen before entering shader mode so the values
         // are set on the shader object itself.
         self.lighting.update_uniforms(total_hours, sky_bottom, cam_pos);
-
-        // 3D scene (lit pass — all 3D draws go through the lit shader).
+        // 3D scene. Models with the lit shader set on their materials will
+        // use it automatically. Immediate-mode draws use raylib's default.
         {
             let mut d3 = d.begin_mode3D(cam);
-            let mut d3s = d3.begin_shader_mode(&mut self.lighting.lit_shader);
             // World.
-            draw_world(&mut d3s, &self.city, &self.assets, &self.cfg);
+            draw_world(&mut d3, &self.city, &self.assets, &self.cfg);
 
             // Pickups.
             for p in &self.pickups {
                 if p.active {
-                    draw_pickup(&mut d3s, p.pos, p.color(), self.time);
+                    draw_pickup(&mut d3, p.pos, p.color(), self.time);
                 }
             }
 
             // Mission marker.
             if self.mission.has_active_marker() {
-                draw_mission_marker(&mut d3s, self.mission.marker, Color::new(255, 80, 255, 255), self.time);
+                draw_mission_marker(&mut d3, self.mission.marker, Color::new(255, 80, 255, 255), self.time);
             }
 
             // Shop markers.
             for shop in &self.shops {
-                draw_mission_marker(&mut d3s, shop.pos, Color::new(80, 200, 255, 255), self.time + 1.5);
+                draw_mission_marker(&mut d3, shop.pos, Color::new(80, 200, 255, 255), self.time + 1.5);
             }
 
             // Vehicles.
@@ -873,7 +873,7 @@ impl<'a> Game<'a> {
                 let rp_pitch = v.render_pitch(alpha);
                 let rp_roll = v.render_roll(alpha);
                 draw_car(
-                    &mut d3s,
+                    &mut d3,
                     &self.assets,
                     rp,
                     ry,
@@ -890,7 +890,7 @@ impl<'a> Game<'a> {
                 let ry = ped.render_yaw(alpha);
                 let is_moving = !ped.dead();
                 draw_character(
-                    &mut d3s,
+                    &mut d3,
                     &self.assets,
                     rp,
                     ry,
@@ -911,7 +911,7 @@ impl<'a> Game<'a> {
                 let ry = cop.render_yaw(alpha);
                 let is_moving = !cop.dead() && cop.state == crate::ai::cop::CopState::Chase;
                 draw_character(
-                    &mut d3s,
+                    &mut d3,
                     &self.assets,
                     rp,
                     ry,
@@ -932,7 +932,7 @@ impl<'a> Game<'a> {
                 let ry = self.player.render_yaw(alpha);
                 let is_moving = vlen_xz(self.player.vel) > 0.1;
                 draw_character(
-                    &mut d3s,
+                    &mut d3,
                     &self.assets,
                     rp,
                     ry,
@@ -948,7 +948,7 @@ impl<'a> Game<'a> {
             }
 
             // FX.
-            self.fx.draw(&mut d3s);
+            self.fx.draw(&mut d3);
         }
 
         // HUD (2D).
