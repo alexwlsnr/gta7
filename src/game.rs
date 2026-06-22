@@ -569,7 +569,7 @@ impl<'a> Game<'a> {
                         ped.vel = vscale(normal, v_speed * 0.9 + 2.0); // Throw ped!
                         self.fx.blood(ped.pos);
                         hit_sound = true;
-                        self.wanted.add_heat(0.3); // crimes get heat
+                        if v.occupied { self.wanted.add_heat(0.3); } // player's car — crime gets heat
                     }
                 }
             }
@@ -590,7 +590,7 @@ impl<'a> Game<'a> {
                         cop.vel = vscale(normal, v_speed * 0.9 + 2.0); // Throw cop!
                         self.fx.blood(cop.pos);
                         hit_sound = true;
-                        self.wanted.add_heat(1.0); // Hitting cops is severe
+                        if v.occupied { self.wanted.add_heat(1.0); } // player's car — hitting cops is severe
                     }
                 }
             }
@@ -600,7 +600,7 @@ impl<'a> Game<'a> {
         }
 
         // --- Vehicle fire & explosions ---
-        let mut explosions = Vec::new();
+        let mut explosions: Vec<(Vector3, bool)> = Vec::new();
         for v in self.vehicles.iter_mut() {
             // If car is down to 20% health or less, it catches fire and degrades over 30s
             if !v.destroyed && v.health <= v.max_health * 0.20 && v.health > 0.0 {
@@ -616,17 +616,17 @@ impl<'a> Game<'a> {
 
             let exploded = v.step_explosion(dt);
             if exploded {
-                explosions.push(v.pos);
+                explosions.push((v.pos, v.occupied));
             }
         }
-        for ex in &explosions {
+        for (ex, was_occupied) in &explosions {
             self.sfx.explosion.play();
             self.fx.explosion(*ex);
             // Damage nearby entities (lethal explosion damage)
             for ped in self.peds.iter_mut() {
                 if vdist_xz(ped.pos, *ex) < 6.0 {
                     ped.take_damage(180.0); // lethal
-                    self.wanted.add_heat(0.5);
+                    if *was_occupied { self.wanted.add_heat(0.5); }
                 }
             }
             for cop in self.cops.iter_mut() {
