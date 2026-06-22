@@ -958,6 +958,7 @@ impl<'a> Game<'a> {
                     v.color,
                     v.damage_level(),
                     v.kind,
+                    v.variant,
                     self.time,
                 );
             }

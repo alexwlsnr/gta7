@@ -5,6 +5,14 @@ use crate::input::Input;
 use crate::world::city::City;
 use crate::config::Config;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VehicleVariant {
+    Sedan,
+    Sports,
+    SUV,
+    Pickup,
+}
+
 pub struct Vehicle {
     pub pos: Vector3,
     pub prev_pos: Vector3,
@@ -27,6 +35,7 @@ pub struct Vehicle {
     pub explode_timer: f32,
     pub occupied: bool,
     pub kind: VehicleKind,
+    pub variant: VehicleVariant,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -40,6 +49,17 @@ impl Vehicle {
         let max_health = match kind {
             VehicleKind::Civilian => 100.0,
             VehicleKind::Police => 140.0,
+        };
+        let variant = match kind {
+            VehicleKind::Police => VehicleVariant::Sedan,
+            VehicleKind::Civilian => {
+                match rand::random::<u8>() % 4 {
+                    0 => VehicleVariant::Sedan,
+                    1 => VehicleVariant::Sports,
+                    2 => VehicleVariant::SUV,
+                    _ => VehicleVariant::Pickup,
+                }
+            }
         };
         Vehicle {
             pos,
@@ -63,6 +83,7 @@ impl Vehicle {
             explode_timer: 0.0,
             occupied: false,
             kind,
+            variant,
         }
     }
 

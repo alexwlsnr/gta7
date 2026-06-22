@@ -5,7 +5,7 @@ use raylib::consts::MaterialMapIndex;
 
 use crate::config::Config;
 use crate::world::city::{Building, City, Axis};
-use crate::vehicle::{Vehicle, VehicleKind};
+use crate::vehicle::{Vehicle, VehicleKind, VehicleVariant};
 use crate::ai::ped::Ped;
 use crate::ai::cop::Cop;
 use crate::player::Player;
@@ -335,12 +335,9 @@ pub fn draw_car(
     color: Color,
     damaged: f32,
     kind: VehicleKind,
+    variant: VehicleVariant,
     time: f32,
 ) {
-    let body_w = 2.0;
-    let body_h = 0.8;
-    let body_l = 4.2;
-
     let half_yaw = yaw * 0.5;
     let q_yaw = Quat {
         w: half_yaw.cos(),
@@ -366,7 +363,8 @@ pub fn draw_car(
     let q = q_yaw * q_pitch * q_roll;
     let (axis, angle_deg) = quat_to_axis_angle(q);
 
-    let body_color = if kind == VehicleKind::Police {
+    // Color definitions based on kind and damage
+    let mut body_color = if kind == VehicleKind::Police {
         Color::new(20, 20, 20, 255)
     } else {
         color
@@ -377,7 +375,33 @@ pub fn draw_car(
         Color::new(60, 80, 110, 255)
     };
 
-    // Body
+    if damaged > 0.0 {
+        // Darken color based on damage
+        let factor = (1.0 - damaged * 0.75).clamp(0.2, 1.0);
+        body_color = Color::new(
+            (body_color.r as f32 * factor) as u8,
+            (body_color.g as f32 * factor) as u8,
+            (body_color.b as f32 * factor) as u8,
+            255,
+        );
+    }
+
+    // Set dimensions based on variant
+    let (body_w, body_h, body_l) = match variant {
+        VehicleVariant::Sports => (2.05, 0.65, 4.3),
+        VehicleVariant::SUV => (2.2, 1.1, 4.4),
+        VehicleVariant::Pickup => (2.1, 0.9, 4.6),
+        VehicleVariant::Sedan => (2.0, 0.8, 4.2),
+    };
+
+    let (cabin_w, cabin_h, cabin_l, cabin_offset_z, cabin_offset_y) = match variant {
+        VehicleVariant::Sports => (1.6, 0.5, 2.3, -0.1, 0.57),
+        VehicleVariant::SUV => (1.8, 0.8, 2.4, -0.3, 0.95),
+        VehicleVariant::Pickup => (1.7, 0.85, 1.6, 0.6, 0.87), // Moved forward!
+        VehicleVariant::Sedan => (1.6, 0.6, 2.0, -0.2, 0.7),
+    };
+
+    // 1. Draw Main Body
     d3.draw_model_ex(
         &assets.plain_cube_model,
         pos,
@@ -385,7 +409,7 @@ pub fn draw_car(
         Vector3 { x: body_w, y: body_h, z: body_l },
         body_color,
     );
-    // Body outline
+    // Body Outline
     d3.draw_model_wires_ex(
         &assets.plain_cube_model,
         pos,
@@ -394,20 +418,182 @@ pub fn draw_car(
         Color::new(20, 20, 20, 255),
     );
 
-    // Cabin: offset in local coordinates: Z = -0.2, Y = 0.7
-    let cabin_local = Vector3 { x: 0.0, y: 0.7, z: -0.2 };
+    // 2. Draw Cabin (if not Pickup bed area)
+    let cabin_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z };
     let cabin_world = vadd(pos, rotate_vector(cabin_local, q));
     d3.draw_model_ex(
         &assets.plain_cube_model,
         cabin_world,
         axis, angle_deg,
-        Vector3 { x: 1.6, y: 0.6, z: 2.0 },
+        Vector3 { x: cabin_w, y: cabin_h, z: cabin_l },
         cabin_color,
     );
 
+    // 3. Windshield and Side Windows on Cabin
+    let window_color = Color::new(25, 30, 45, 255);
+    // Front windshield
+    let front_windshield_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z + cabin_l * 0.5 + 0.01 };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        vadd(pos, rotate_vector(front_windshield_local, q)),
+        axis, angle_deg,
+        Vector3 { x: cabin_w * 0.9, y: cabin_h * 0.7, z: 0.02 },
+        window_color,
+    );
+    // Rear window (only for Sedan/Sports/SUV - Pickup cabin back window is smaller)
+    let rear_window_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z - cabin_l * 0.5 - 0.01 };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        vadd(pos, rotate_vector(rear_window_local, q)),
+        axis, angle_deg,
+        Vector3 { x: cabin_w * 0.9, y: cabin_h * 0.6, z: 0.02 },
+        window_color,
+    );
+    // Left window
+    let left_window_local = Vector3 { x: -cabin_w * 0.5 - 0.01, y: cabin_offset_y, z: cabin_offset_z };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        vadd(pos, rotate_vector(left_window_local, q)),
+        axis, angle_deg,
+        Vector3 { x: 0.02, y: cabin_h * 0.7, z: cabin_l * 0.8 },
+        window_color,
+    );
+    // Right window
+    let right_window_local = Vector3 { x: cabin_w * 0.5 + 0.01, y: cabin_offset_y, z: cabin_offset_z };
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        vadd(pos, rotate_vector(right_window_local, q)),
+        axis, angle_deg,
+        Vector3 { x: 0.02, y: cabin_h * 0.7, z: cabin_l * 0.8 },
+        window_color,
+    );
+
+    // 4. Variant-Specific High-Poly Detail Models
+    match variant {
+        VehicleVariant::Sports => {
+            // Rear spoiler wing columns
+            let spoiler_z = -body_l * 0.46;
+            let col_y = body_h * 0.5 + 0.15;
+            let left_col = Vector3 { x: -body_w * 0.4, y: col_y, z: spoiler_z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(left_col, q)),
+                axis, angle_deg,
+                Vector3 { x: 0.08, y: 0.3, z: 0.08 },
+                body_color,
+            );
+            let right_col = Vector3 { x: body_w * 0.4, y: col_y, z: spoiler_z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(right_col, q)),
+                axis, angle_deg,
+                Vector3 { x: 0.08, y: 0.3, z: 0.08 },
+                body_color,
+            );
+            // Spoiler wing bar
+            let wing_local = Vector3 { x: 0.0, y: body_h * 0.5 + 0.3, z: spoiler_z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(wing_local, q)),
+                axis, angle_deg,
+                Vector3 { x: body_w * 1.05, y: 0.06, z: 0.35 },
+                Color::new(30, 30, 30, 255), // Carbon spoiler look
+            );
+            // Double exhaust pipes at back
+            let ex_z = -body_l * 0.5;
+            let ex_left = Vector3 { x: -0.4, y: -body_h * 0.4, z: ex_z };
+            let ex_right = Vector3 { x: 0.4, y: -body_h * 0.4, z: ex_z };
+            let p_start_left = vadd(pos, rotate_vector(ex_left, q));
+            let p_end_left = vadd(p_start_left, rotate_vector(Vector3 { x: 0.0, y: 0.0, z: -0.2 }, q));
+            let p_start_right = vadd(pos, rotate_vector(ex_right, q));
+            let p_end_right = vadd(p_start_right, rotate_vector(Vector3 { x: 0.0, y: 0.0, z: -0.2 }, q));
+            
+            d3.draw_cylinder_ex(p_start_left, p_end_left, 0.08, 0.08, 6, Color::new(180, 180, 180, 255));
+            d3.draw_cylinder_ex(p_start_right, p_end_right, 0.08, 0.08, 6, Color::new(180, 180, 180, 255));
+        }
+        VehicleVariant::SUV => {
+            // Roof rack rails on top of cabin
+            let rail_y = cabin_offset_y + cabin_h * 0.5 + 0.05;
+            let rail_l_left = Vector3 { x: -cabin_w * 0.45, y: rail_y, z: cabin_offset_z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(rail_l_left, q)),
+                axis, angle_deg,
+                Vector3 { x: 0.06, y: 0.06, z: cabin_l * 0.9 },
+                Color::new(30, 30, 30, 255),
+            );
+            let rail_l_right = Vector3 { x: cabin_w * 0.45, y: rail_y, z: cabin_offset_z };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(rail_l_right, q)),
+                axis, angle_deg,
+                Vector3 { x: 0.06, y: 0.06, z: cabin_l * 0.9 },
+                Color::new(30, 30, 30, 255),
+            );
+            // Spare tire on the back trunk
+            let tire_local = Vector3 { x: 0.0, y: 0.1, z: -body_l * 0.5 - 0.1 };
+            let tire_world = vadd(pos, rotate_vector(tire_local, q));
+            let wheel_axis = rotate_vector(Vector3 { x: 0.0, y: 0.0, z: 1.0 }, q);
+            let w_start = vsub(tire_world, vscale(wheel_axis, 0.12));
+            let w_end = vadd(tire_world, vscale(wheel_axis, 0.12));
+            d3.draw_cylinder_ex(w_start, w_end, 0.45, 0.45, 8, Color::new(25, 25, 25, 255));
+            d3.draw_cylinder_ex(w_end, vadd(w_end, vscale(wheel_axis, 0.01)), 0.25, 0.25, 8, Color::new(160, 160, 160, 255));
+            // Bull bar on front bumper
+            let bar_local = Vector3 { x: 0.0, y: -0.1, z: body_l * 0.5 + 0.1 };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(bar_local, q)),
+                axis, angle_deg,
+                Vector3 { x: body_w * 0.8, y: body_h * 0.7, z: 0.08 },
+                Color::new(30, 30, 30, 255),
+            );
+        }
+        VehicleVariant::Pickup => {
+            // Hollow cargo bed walls
+            // Left wall
+            let wall_y = body_h * 0.5 + 0.35;
+            let left_wall = Vector3 { x: -body_w * 0.46, y: wall_y, z: -1.0 };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(left_wall, q)),
+                axis, angle_deg,
+                Vector3 { x: 0.1, y: 0.7, z: 2.6 },
+                body_color,
+            );
+            // Right wall
+            let right_wall = Vector3 { x: body_w * 0.46, y: wall_y, z: -1.0 };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(right_wall, q)),
+                axis, angle_deg,
+                Vector3 { x: 0.1, y: 0.7, z: 2.6 },
+                body_color,
+            );
+            // Tailgate wall
+            let tailgate = Vector3 { x: 0.0, y: wall_y, z: -2.3 };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(tailgate, q)),
+                axis, angle_deg,
+                Vector3 { x: body_w * 0.9, y: 0.7, z: 0.1 },
+                body_color,
+            );
+            // Bed floor (dark grey)
+            let bed_floor = Vector3 { x: 0.0, y: 0.05, z: -1.0 };
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                vadd(pos, rotate_vector(bed_floor, q)),
+                axis, angle_deg,
+                Vector3 { x: body_w * 0.9, y: 0.1, z: 2.6 },
+                Color::new(40, 40, 40, 255),
+            );
+        }
+        _ => {}
+    }
+
+    // 5. Draw Police Light Bar / Siren domes
     if kind == VehicleKind::Police {
-        // Dark bar base
-        let bar_local = Vector3 { x: 0.0, y: 1.05, z: -0.2 };
+        let bar_local = Vector3 { x: 0.0, y: cabin_offset_y + cabin_h * 0.5 + 0.05, z: cabin_offset_z };
         let bar_world = vadd(pos, rotate_vector(bar_local, q));
         d3.draw_model_ex(
             &assets.plain_cube_model,
@@ -417,75 +603,87 @@ pub fn draw_car(
             Color::new(30, 30, 30, 255),
         );
 
-        // Flashing lights (alternate red and blue)
         let red_flash = (time * 12.0).sin() > 0.0;
         let left_color = if red_flash { Color::new(255, 30, 30, 255) } else { Color::new(50, 0, 0, 255) };
         let right_color = if !red_flash { Color::new(30, 30, 255, 255) } else { Color::new(0, 0, 50, 255) };
 
-        // Left siren dome
-        let left_local = Vector3 { x: -0.35, y: 1.15, z: -0.2 };
-        let left_world = vadd(pos, rotate_vector(left_local, q));
+        let left_local = Vector3 { x: -0.35, y: cabin_offset_y + cabin_h * 0.5 + 0.15, z: cabin_offset_z };
         d3.draw_model_ex(
             &assets.plain_cube_model,
-            left_world,
+            vadd(pos, rotate_vector(left_local, q)),
             axis, angle_deg,
             Vector3 { x: 0.3, y: 0.12, z: 0.2 },
             left_color,
         );
 
-        // Right siren dome
-        let right_local = Vector3 { x: 0.35, y: 1.15, z: -0.2 };
-        let right_world = vadd(pos, rotate_vector(right_local, q));
+        let right_local = Vector3 { x: 0.35, y: cabin_offset_y + cabin_h * 0.5 + 0.15, z: cabin_offset_z };
         d3.draw_model_ex(
             &assets.plain_cube_model,
-            right_world,
+            vadd(pos, rotate_vector(right_local, q)),
             axis, angle_deg,
             Vector3 { x: 0.3, y: 0.12, z: 0.2 },
             right_color,
         );
     }
 
-    // Wheels (4 cylinders), positioned using rotated local offsets and drawn along wheel axis
+    // 6. Draw Wheels with metal rims
+    let (w_rad, w_width) = match variant {
+        VehicleVariant::Sports => (0.38, 0.35),
+        VehicleVariant::SUV => (0.52, 0.36),
+        VehicleVariant::Pickup => (0.5, 0.34),
+        VehicleVariant::Sedan => (0.4, 0.3),
+    };
+    let w_offset = w_width * 0.5;
+
     let wheel_local_offsets = [
-        Vector3 { x: body_w * 0.5, y: -0.4, z: body_l * 0.32 },
-        Vector3 { x: -body_w * 0.5, y: -0.4, z: body_l * 0.32 },
-        Vector3 { x: body_w * 0.5, y: -0.4, z: -body_l * 0.32 },
-        Vector3 { x: -body_w * 0.5, y: -0.4, z: -body_l * 0.32 },
+        Vector3 { x: body_w * 0.5, y: -body_h * 0.5, z: body_l * 0.32 },
+        Vector3 { x: -body_w * 0.5, y: -body_h * 0.5, z: body_l * 0.32 },
+        Vector3 { x: body_w * 0.5, y: -body_h * 0.5, z: -body_l * 0.32 },
+        Vector3 { x: -body_w * 0.5, y: -body_h * 0.5, z: -body_l * 0.32 },
     ];
     let local_wheel_axis = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
     let world_wheel_axis = rotate_vector(local_wheel_axis, q);
 
     for off in wheel_local_offsets {
         let wheel_center = vadd(pos, rotate_vector(off, q));
-        let start = vsub(wheel_center, vscale(world_wheel_axis, 0.15));
-        let end = vadd(wheel_center, vscale(world_wheel_axis, 0.15));
+        let start = vsub(wheel_center, vscale(world_wheel_axis, w_offset));
+        let end = vadd(wheel_center, vscale(world_wheel_axis, w_offset));
         
+        // Draw black tire
         d3.draw_cylinder_ex(
             start, end,
-            0.4, 0.4, 10,
+            w_rad, w_rad, 8,
             Color::new(25, 25, 25, 255),
         );
+
+        // Draw metal rim inside the tire outer face
+        let rim_rad = w_rad * 0.55;
+        if off.x < 0.0 {
+            // Left wheel: outer face is start
+            let rim_start = start;
+            let rim_end = vadd(start, vscale(world_wheel_axis, 0.04));
+            d3.draw_cylinder_ex(rim_start, rim_end, rim_rad, rim_rad, 6, Color::new(170, 170, 175, 255));
+        } else {
+            // Right wheel: outer face is end
+            let rim_start = vsub(end, vscale(world_wheel_axis, 0.04));
+            let rim_end = end;
+            d3.draw_cylinder_ex(rim_start, rim_end, rim_rad, rim_rad, 6, Color::new(170, 170, 175, 255));
+        }
     }
 
-    // Headlights (front, white) + taillights (rear, red)
+    // 7. Headlights & Taillights
     let light_offsets_color = [
         (Vector3 { x: body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
         (Vector3 { x: -body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
-        (Vector3 { x: body_w * 0.4, y: 0.0, z: -body_l * 0.5 }, Color::new(200, 40, 40, 255)),
-        (Vector3 { x: -body_w * 0.4, y: 0.0, z: -body_l * 0.5 }, Color::new(200, 40, 40, 255)),
+        (Vector3 { x: body_w * 0.4, y: 0.1, z: -body_l * 0.5 }, Color::new(220, 30, 30, 255)),
+        (Vector3 { x: -body_w * 0.4, y: 0.1, z: -body_l * 0.5 }, Color::new(220, 30, 30, 255)),
     ];
     for (off, col) in light_offsets_color {
         let light_pos = vadd(pos, rotate_vector(off, q));
-        d3.draw_model_ex(
-            &assets.plain_cube_model,
-            light_pos,
-            axis, angle_deg,
-            Vector3 { x: 0.3, y: 0.2, z: 0.2 },
-            col,
-        );
+        d3.draw_sphere(light_pos, 0.15, col);
     }
 
-    // Damage smoke
+    // Damage smoke wires
     if damaged > 0.4 {
         d3.draw_model_wires_ex(
             &assets.plain_cube_model,
