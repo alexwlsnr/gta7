@@ -206,10 +206,11 @@ pub fn sun_color(hour: f32) -> Color {
 }
 
 /// Compute the sun's world position for shadow camera placement.
-/// `dir` = sun direction (from `sun_direction`). `player_pos` = camera target.
-/// The sun is placed far along the inverse of the light direction.
-pub fn sun_position(dir: Vector3, player_pos: Vector3) -> Vector3 {
-    // Sun is 200 units away in the opposite direction of the light.
+/// `hour` = time of day (0..24). `player_pos` = camera target.
+/// The sun is placed 200 units away in the opposite of the light direction
+/// derived from `sun_direction(hour)`.
+pub fn sun_position(hour: f32, player_pos: Vector3) -> Vector3 {
+    let dir = sun_direction(hour);
     Vector3 {
         x: player_pos.x - dir.x * 200.0,
         y: player_pos.y - dir.y * 200.0,
@@ -241,7 +242,6 @@ pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use raylib::ffi::Vector3;
 
     #[test]
     fn sun_direction_at_noon_is_downward() {
