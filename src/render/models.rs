@@ -337,8 +337,13 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         );
     }
 
-    // Buildings: textured model tinted per-building.
+    // Buildings: textured model tinted per-building (culled by camera distance to optimize main pass)
     for b in &city.buildings {
+        let c = b.box3d.center();
+        let dist_sq = (c.x - cam_pos.x).powi(2) + (c.z - cam_pos.z).powi(2);
+        if dist_sq > 130.0 * 130.0 {
+            continue;
+        }
         draw_building(d3, b, assets, &p);
     }
 
@@ -429,14 +434,35 @@ fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &
             body,
         );
     } else {
-        d3.draw_cube(c, w, hgt, l, body);
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            c,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            0.0,
+            Vector3 { x: w, y: hgt, z: l },
+            body,
+        );
     }
 
-    // Roof cap.
+    // Roof cap (using plain_cube_model instead of draw_cube to avoid CPU vertex generation)
     let top = Vector3 { x: c.x, y: c.y + h.y + 0.1, z: c.z };
-    d3.draw_cube(top, w * 0.9, 0.4, l * 0.9, p.building_top(b.color_index));
-    // Edge wires for definition.
-    d3.draw_cube_wires(c, w, hgt, l, Color::new(15, 15, 20, 255));
+    d3.draw_model_ex(
+        &assets.plain_cube_model,
+        top,
+        Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+        0.0,
+        Vector3 { x: w * 0.9, y: 0.4, z: l * 0.9 },
+        p.building_top(b.color_index),
+    );
+    // Edge wires (using plain_cube_model wires to avoid CPU lines generation)
+    d3.draw_model_wires_ex(
+        &assets.plain_cube_model,
+        c,
+        Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+        0.0,
+        Vector3 { x: w, y: hgt, z: l },
+        Color::new(15, 15, 20, 255),
+    );
 }
 
 /// Draw a car body at a position with a yaw (radians) and a color.
@@ -1113,50 +1139,100 @@ pub fn draw_mission_marker(d3: &mut impl RaylibDraw3D, pos: Vector3, color: Colo
 pub fn draw_shadow_casters(
     d3: &mut impl RaylibDraw3D,
     city: &City,
-    _assets: &Assets,
+    assets: &Assets,
     _cfg: &Config,
     vehicles: &[Vehicle],
     peds: &[Ped],
     cops: &[Cop],
     player: &Player,
 ) {
+    let play_pos = player.pos;
+
     // Buildings.
     for b in &city.buildings {
         let c = b.box3d.center();
+        
+        // Distance culling: Skip buildings further than 90m from the player.
+        // The shadow map only covers a 120m volume centered around the player,
+        // so buildings further away cannot cast visible shadows in the view.
+        let dist_sq = (c.x - play_pos.x).powi(2) + (c.z - play_pos.z).powi(2);
+        if dist_sq > 90.0 * 90.0 {
+            continue;
+        }
+
         let h = b.box3d.half();
-        d3.draw_cube(c, h.x * 2.0, h.y * 2.0, h.z * 2.0, Color::WHITE);
+        // Use plain_cube_model instead of immediate-mode draw_cube to avoid CPU vertex generation!
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            c,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            0.0,
+            Vector3 { x: h.x * 2.0, y: h.y * 2.0, z: h.z * 2.0 },
+            Color::WHITE,
+        );
     }
     // Vehicles (simple boxes for shadow).
     for v in vehicles {
         if v.destroyed {
             continue;
         }
-        d3.draw_cube(v.pos, 2.0, 0.8, 4.2, Color::WHITE);
+        let dist_sq = (v.pos.x - play_pos.x).powi(2) + (v.pos.z - play_pos.z).powi(2);
+        if dist_sq > 90.0 * 90.0 {
+            continue;
+        }
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            v.pos,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            v.yaw.to_degrees(),
+            Vector3 { x: 2.0, y: 0.8, z: 4.2 },
+            Color::WHITE,
+        );
     }
     // Characters (simple boxes for shadow).
     for ped in peds {
         if ped.dead() {
             continue;
         }
-        d3.draw_cube(
+        let dist_sq = (ped.pos.x - play_pos.x).powi(2) + (ped.pos.z - play_pos.z).powi(2);
+        if dist_sq > 90.0 * 90.0 {
+            continue;
+        }
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
             Vector3 { x: ped.pos.x, y: ped.pos.y + 0.9, z: ped.pos.z },
-            0.4, 1.8, 0.4, Color::WHITE,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            ped.yaw.to_degrees(),
+            Vector3 { x: 0.4, y: 1.8, z: 0.4 },
+            Color::WHITE,
         );
     }
     for cop in cops {
         if cop.dead() {
             continue;
         }
-        d3.draw_cube(
+        let dist_sq = (cop.pos.x - play_pos.x).powi(2) + (cop.pos.z - play_pos.z).powi(2);
+        if dist_sq > 90.0 * 90.0 {
+            continue;
+        }
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
             Vector3 { x: cop.pos.x, y: cop.pos.y + 0.9, z: cop.pos.z },
-            0.4, 1.8, 0.4, Color::WHITE,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            cop.yaw.to_degrees(),
+            Vector3 { x: 0.4, y: 1.8, z: 0.4 },
+            Color::WHITE,
         );
     }
     // Player.
     if player.alive {
-        d3.draw_cube(
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
             Vector3 { x: player.pos.x, y: player.pos.y + 0.9, z: player.pos.z },
-            0.4, 1.8, 0.4, Color::WHITE,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            player.yaw.to_degrees(),
+            Vector3 { x: 0.4, y: 1.8, z: 0.4 },
+            Color::WHITE,
         );
     }
 }
