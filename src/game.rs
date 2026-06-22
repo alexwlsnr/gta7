@@ -7,7 +7,7 @@ use crate::input::Input;
 use crate::mathx::*;
 use crate::world::city::City;
 use crate::player::{Player, Weapon};
-use crate::vehicle::{Vehicle, VehicleKind};
+use crate::vehicle::{Vehicle, VehicleKind, VehicleVariant};
 use crate::camera::FollowCamera;
 use crate::combat::{fire_weapon, melee_attack, cop_fire, HitKind};
 use crate::wanted::WantedSystem;
@@ -267,6 +267,38 @@ impl<'a> Game<'a> {
             let crashed = self.vehicles[vi].update_driven(input, &self.city, &self.cfg, dt);
             if crashed {
                 self.sfx.crash.play();
+                // Reconstruct rotation quaternion of the car for spark emitter direction
+                let cry = self.vehicles[vi].yaw;
+                let crp = self.vehicles[vi].pitch;
+                let crr = self.vehicles[vi].roll;
+                let cq_yaw = crate::render::models::Quat {
+                    w: (cry * 0.5).cos(),
+                    x: 0.0,
+                    y: (cry * 0.5).sin(),
+                    z: 0.0,
+                };
+                let cq_pitch = crate::render::models::Quat {
+                    w: (crp * 0.5).cos(),
+                    x: (crp * 0.5).sin(),
+                    y: 0.0,
+                    z: 0.0,
+                };
+                let cq_roll = crate::render::models::Quat {
+                    w: (crr * 0.5).cos(),
+                    x: 0.0,
+                    y: 0.0,
+                    z: (crr * 0.5).sin(),
+                };
+                let cq = cq_yaw * cq_pitch * cq_roll;
+                let front_pos = vadd(self.vehicles[vi].pos, crate::render::models::rotate_vector(Vector3 { x: 0.0, y: 0.0, z: 1.5 }, cq));
+                self.fx.burst(
+                    front_pos,
+                    15, // count
+                    3.0, // speed
+                    Color::new(255, 180, 50, 230), // bright spark orange
+                    0.5, // size
+                    0.3, // lifetime
+                );
             }
             // Stunt Jump Detection
             if let Some(air_time) = self.vehicles[vi].just_landed_stunt {
@@ -284,7 +316,8 @@ impl<'a> Game<'a> {
             if is_sliding {
                 let fwd = dir_from_yaw(car.yaw);
                 let rear_pos = vsub(car.pos, vscale(fwd, 1.3));
-                self.fx.burst(rear_pos, 2, 1.2, Color::new(200, 200, 202, 130), 0.4, 0.2);
+                self.fx.burst(rear_pos, 4, 1.5, Color::new(210, 210, 215, 160), 0.6, 0.35); // thick grey smoke
+                self.fx.burst(rear_pos, 1, 0.5, Color::new(40, 40, 42, 200), 0.3, 0.25);   // black rubber fragments
 
                 // Add skidmark segment slightly raised above the ground to avoid z-fighting
                 let cur_q_yaw = crate::render::models::Quat {
@@ -914,6 +947,143 @@ impl<'a> Game<'a> {
             d.draw_rectangle(0, y, d.get_screen_width(), 2, c);
         }
 
+        // Gather dynamic point lights
+        let mut gathered_lights = Vec::new();
+
+        // 1. Player car lights
+        if let Some(pv) = self.player.in_vehicle {
+            if let Some(v) = self.vehicles.get(pv) {
+                let p = v.render_pos(alpha);
+                let q_yaw = crate::render::models::Quat {
+                    w: (v.render_yaw(alpha) * 0.5).cos(),
+                    x: 0.0,
+                    y: (v.render_yaw(alpha) * 0.5).sin(),
+                    z: 0.0,
+                };
+                let q_pitch = crate::render::models::Quat {
+                    w: (v.render_pitch(alpha) * 0.5).cos(),
+                    x: (v.render_pitch(alpha) * 0.5).sin(),
+                    y: 0.0,
+                    z: 0.0,
+                };
+                let q_roll = crate::render::models::Quat {
+                    w: (v.render_roll(alpha) * 0.5).cos(),
+                    x: 0.0,
+                    y: 0.0,
+                    z: (v.render_roll(alpha) * 0.5).sin(),
+                };
+                let q = q_yaw * q_pitch * q_roll;
+                
+                let (_body_w, _body_h, body_l) = match v.variant {
+                    VehicleVariant::Sports => (2.05, 0.65, 4.3),
+                    VehicleVariant::SUV => (2.2, 1.1, 4.4),
+                    VehicleVariant::Pickup => (2.1, 0.9, 4.6),
+                    VehicleVariant::Sedan => (2.0, 0.8, 4.2),
+                };
+
+                let is_night = !(6.5..=18.5).contains(&total_hours);
+                if is_night {
+                    // Headlights point light: slightly in front of the vehicle
+                    let headlight_offset = Vector3 { x: 0.0, y: 0.0, z: body_l * 0.5 + 2.0 };
+                    let headlight_pos = vadd(p, crate::render::models::rotate_vector(headlight_offset, q));
+                    gathered_lights.push(crate::render::lighting::PointLight {
+                        pos: headlight_pos,
+                        color: Vector3 { x: 1.4, y: 1.4, z: 1.2 }, // bright warm white
+                        radius: 20.0,
+                    });
+
+                    // Taillights point light: slightly behind the vehicle
+                    let taillight_offset = Vector3 { x: 0.0, y: 0.0, z: -body_l * 0.5 - 1.0 };
+                    let taillight_pos = vadd(p, crate::render::models::rotate_vector(taillight_offset, q));
+                    gathered_lights.push(crate::render::lighting::PointLight {
+                        pos: taillight_pos,
+                        color: Vector3 { x: 0.8, y: 0.1, z: 0.1 }, // red taillights
+                        radius: 10.0,
+                    });
+                }
+            }
+        }
+
+        // 2. Police Sirens
+        for v in &self.vehicles {
+            if v.kind == VehicleKind::Police && !v.destroyed {
+                let is_red = (self.time * 12.0).sin() > 0.0;
+                let col = if is_red {
+                    Vector3 { x: 1.8, y: 0.1, z: 0.1 }
+                } else {
+                    Vector3 { x: 0.1, y: 0.1, z: 1.8 }
+                };
+                let p = v.render_pos(alpha);
+                let siren_pos = Vector3 { x: p.x, y: p.y + 1.2, z: p.z };
+                gathered_lights.push(crate::render::lighting::PointLight {
+                    pos: siren_pos,
+                    color: col,
+                    radius: 15.0,
+                });
+            }
+        }
+
+        // 3. Streetlights
+        let play_pos = self.player.render_pos(alpha);
+        let bs = self.city.block_size;
+        let rw = self.city.road_width;
+        let sw = self.cfg.sidewalk_width;
+        let sw_offset = rw * 0.5 + sw * 0.5;
+        let half_extent = self.city.ground_half;
+        let origin = -half_extent;
+        let n = self.city.blocks;
+
+        // Collect streetlights around the player
+        let p_grid_x = ((play_pos.x - origin) / bs).round() as i32;
+        let p_grid_z = ((play_pos.z - origin) / bs).round() as i32;
+
+        // Loop over nearby intersections (within 2 blocks)
+        for dx in -2..=2 {
+            let i = p_grid_x + dx;
+            if i < 0 || i > n as i32 { continue; }
+            let cx = origin + i as f32 * bs;
+            for dz in -2..=2 {
+                let j = p_grid_z + dz;
+                if j < 0 || j > n as i32 { continue; }
+                let cz = origin + j as f32 * bs;
+
+                let offsets = [
+                    (-sw_offset, -sw_offset),
+                    (sw_offset, -sw_offset),
+                    (-sw_offset, sw_offset),
+                    (sw_offset, sw_offset),
+                ];
+                for (ox, oz) in offsets {
+                    let sx = cx + ox;
+                    let sz = cz + oz;
+                    
+                    let arm_dir_x = -ox.signum() * 0.8;
+                    let arm_dir_z = -oz.signum() * 0.8;
+                    let bulb_pos = Vector3 { x: sx + arm_dir_x, y: 3.85, z: sz + arm_dir_z };
+
+                    let is_night = !(6.5..=18.5).contains(&total_hours);
+                    if is_night {
+                        gathered_lights.push(crate::render::lighting::PointLight {
+                            pos: bulb_pos,
+                            color: Vector3 { x: 1.0, y: 0.9, z: 0.6 }, // warm yellow streetlight
+                            radius: 16.0,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Sort all gathered lights by distance to the player
+        let ref_pos = play_pos;
+        gathered_lights.sort_by(|a, b| {
+            let da = (a.pos.x - ref_pos.x).powi(2) + (a.pos.y - ref_pos.y).powi(2) + (a.pos.z - ref_pos.z).powi(2);
+            let db = (b.pos.x - ref_pos.x).powi(2) + (b.pos.y - ref_pos.y).powi(2) + (b.pos.z - ref_pos.z).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Pass closest 6 point lights to the shader
+        self.lighting.update_point_lights(&gathered_lights);
+
         // Update lit shader uniforms for this frame (sun direction, color, fog,
         // shadow matrix). Must happen before entering shader mode so the values
         // are set on the shader object itself.
@@ -923,7 +1093,7 @@ impl<'a> Game<'a> {
         {
             let mut d3 = d.begin_mode3D(cam);
             // World.
-            draw_world(&mut d3, &self.city, &self.assets, &self.cfg);
+            draw_world(&mut d3, &self.city, &self.assets, &self.cfg, total_hours);
 
             // Pickups.
             for p in &self.pickups {

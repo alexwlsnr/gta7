@@ -4,6 +4,13 @@ use raylib::ffi::Vector3;
 use raylib::prelude::*;
 use crate::config::{sun_color, sun_direction, sun_position};
 
+#[derive(Clone, Copy, Debug)]
+pub struct PointLight {
+    pub pos: Vector3,
+    pub color: Vector3,
+    pub radius: f32,
+}
+
 pub struct LightingSystem {
     pub lit_shader: Shader,
     pub depth_shader: Shader,
@@ -18,6 +25,9 @@ pub struct LightingSystem {
     loc_camera_pos: i32,
     loc_shadow_map: i32,
     loc_light_space: i32,
+    loc_window_glow: i32,
+    loc_light_count: i32,
+    loc_point_lights: [(i32, i32, i32); 6],
     // Cached uniform locations for depth shader.
     pub loc_depth_mvp: i32,
     // Current light space matrix (updated each frame).
@@ -70,6 +80,16 @@ impl LightingSystem {
         let loc_light_space = lit_shader.get_shader_location("u_lightSpaceMatrix");
         let loc_depth_mvp = depth_shader.get_shader_location("mvp");
 
+        let loc_window_glow = lit_shader.get_shader_location("u_windowGlow");
+        let loc_light_count = lit_shader.get_shader_location("u_light_count");
+        let mut loc_point_lights = [(0, 0, 0); 6];
+        for (i, item) in loc_point_lights.iter_mut().enumerate() {
+            let pos_loc = lit_shader.get_shader_location(&format!("u_light{}_pos", i));
+            let col_loc = lit_shader.get_shader_location(&format!("u_light{}_color", i));
+            let rad_loc = lit_shader.get_shader_location(&format!("u_light{}_radius", i));
+            *item = (pos_loc, col_loc, rad_loc);
+        }
+
         LightingSystem {
             lit_shader,
             depth_shader,
@@ -83,6 +103,9 @@ impl LightingSystem {
             loc_camera_pos,
             loc_shadow_map,
             loc_light_space,
+            loc_window_glow,
+            loc_light_count,
+            loc_point_lights,
             loc_depth_mvp,
             light_space: Matrix::identity(),
         }
@@ -191,10 +214,41 @@ impl LightingSystem {
         // Shadow map texture.
         self.lit_shader
             .set_shader_value_texture(self.loc_shadow_map, self.shadow_map.texture());
+
+        // Window glow logic based on hour
+        let window_glow = if !(6.0..=20.0).contains(&h) {
+            1.0
+        } else if (6.0..8.0).contains(&h) {
+            1.0 - (h - 6.0) / 2.0
+        } else if (18.0..=20.0).contains(&h) {
+            (h - 18.0) / 2.0
+        } else {
+            0.0
+        };
+        self.lit_shader.set_shader_value(self.loc_window_glow, window_glow);
     }
 
     /// Get the light space matrix (for use in draw functions if needed).
     pub fn get_light_space_matrix(&self) -> Matrix {
         self.light_space
+    }
+
+    /// Update dynamic point lights in the shader.
+    pub fn update_point_lights(&mut self, lights: &[PointLight]) {
+        let count = lights.len().min(6);
+        self.lit_shader.set_shader_value(self.loc_light_count, count as i32);
+        for (i, light) in lights.iter().enumerate().take(count) {
+            let (pos_loc, col_loc, rad_loc) = self.loc_point_lights[i];
+            self.lit_shader.set_shader_value(pos_loc, light.pos);
+            self.lit_shader.set_shader_value(col_loc, light.color);
+            self.lit_shader.set_shader_value(rad_loc, light.radius);
+        }
+        // Fill remaining shader slots with inactive lights
+        for i in count..6 {
+            let (pos_loc, col_loc, rad_loc) = self.loc_point_lights[i];
+            self.lit_shader.set_shader_value(pos_loc, Vector3::zero());
+            self.lit_shader.set_shader_value(col_loc, Vector3::zero());
+            self.lit_shader.set_shader_value(rad_loc, 0.0f32);
+        }
     }
 }

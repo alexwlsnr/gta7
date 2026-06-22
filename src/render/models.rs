@@ -99,7 +99,7 @@ impl Assets {
                 let is_dark = (x / 2 + y / 2) % 2 == 0;
                 let val = if is_dark { 18 } else { 32 };
                 // Add minor texture variation
-                let noise = ((x % 2) * 4) as i32 - 2;
+                let noise = (x % 2) * 4 - 2;
                 let c = (val + noise).clamp(0, 255) as u8;
                 carbon.draw_pixel(x, y, Color::new(c, c, c, 255));
             }
@@ -169,8 +169,8 @@ impl Assets {
     }
 }
 
-/// Draw the ground plane + roads + sidewalks + parks.
-pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg: &Config) {
+/// Draw the ground plane + roads + sidewalks + parks + streetlights.
+pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg: &Config, hour: f32) {
     let half = city.ground_half;
     let p = cfg.palette();
 
@@ -220,6 +220,7 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
             Vector2::new(half * 2.0, sw),
             sw_col,
         );
+
         // Vertical roads (along Z): sidewalks at x = line ± sw_off
         d3.draw_plane(
             Vector3 { x: line - sw_off, y: 0.02, z: 0.0 },
@@ -339,6 +340,48 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
     // Buildings: textured model tinted per-building.
     for b in &city.buildings {
         draw_building(d3, b, assets, &p);
+    }
+
+    // Streetlights at intersection corners
+    let is_night = !(6.5..=18.5).contains(&hour);
+    let bulb_color = if is_night { Color::new(255, 255, 180, 255) } else { Color::new(180, 180, 180, 255) };
+    let sw_offset = rw * 0.5 + sw * 0.5;
+
+    for i in 0..=n {
+        let cx = origin + i as f32 * bs;
+        for j in 0..=n {
+            let cz = origin + j as f32 * bs;
+            let offsets = [
+                (-sw_offset, -sw_offset),
+                (sw_offset, -sw_offset),
+                (-sw_offset, sw_offset),
+                (sw_offset, sw_offset),
+            ];
+            for (ox, oz) in offsets {
+                let sx = cx + ox;
+                let sz = cz + oz;
+                // Draw pole
+                d3.draw_cylinder_ex(
+                    Vector3 { x: sx, y: 0.0, z: sz },
+                    Vector3 { x: sx, y: 4.0, z: sz },
+                    0.07, 0.07, 5,
+                    Color::new(55, 55, 60, 255),
+                );
+                // Arm pointing diagonally inwards to the intersection center
+                let dir_x = -ox.signum() * 0.8;
+                let dir_z = -oz.signum() * 0.8;
+                d3.draw_cube(
+                    Vector3 { x: sx + dir_x * 0.5, y: 4.0, z: sz + dir_z * 0.5 },
+                    if dir_x.abs() > 0.01 { 1.0 } else { 0.15 },
+                    0.07,
+                    if dir_z.abs() > 0.01 { 1.0 } else { 0.15 },
+                    Color::new(65, 65, 70, 255),
+                );
+                // Warm bulb
+                let bulb_pos = Vector3 { x: sx + dir_x, y: 3.85, z: sz + dir_z };
+                d3.draw_sphere(bulb_pos, 0.18, bulb_color);
+            }
+        }
     }
 }
 
@@ -475,12 +518,18 @@ pub fn draw_car(
         Color::new(20, 20, 20, 255),
     );
 
-    // 1.5 Draw Front Radiator Grille
+    // 1.5 Draw Front Radiator Grille (dents slightly when damaged)
+    let grille_rot = if damaged > 0.2 { (damaged - 0.2) * 15.0 } else { 0.0 };
+    let grille_offset = if damaged > 0.2 {
+        Vector3 { x: -0.05 * damaged, y: -0.1 * damaged, z: -0.15 * damaged }
+    } else {
+        Vector3::zero()
+    };
     let grille_local = Vector3 { x: 0.0, y: -body_h * 0.1, z: body_l * 0.5 + 0.015 };
     d3.draw_model_ex(
         &assets.grill_cube_model,
-        vadd(pos, rotate_vector(grille_local, q)),
-        axis, angle_deg,
+        vadd(pos, rotate_vector(vadd(grille_local, grille_offset), q)),
+        axis, angle_deg + grille_rot,
         Vector3 { x: body_w * 0.6, y: body_h * 0.4, z: 0.02 },
         Color::WHITE,
     );
@@ -557,12 +606,18 @@ pub fn draw_car(
                 Vector3 { x: 0.08, y: 0.3, z: 0.08 },
                 body_color,
             );
-            // Spoiler wing bar (textured with carbon fiber)
+            // Spoiler wing bar (textured with carbon fiber, tilts/hangs loose when damaged)
+            let wing_rot = if damaged > 0.3 { (damaged - 0.3) * 25.0 } else { 0.0 };
+            let wing_offset = if damaged > 0.3 {
+                Vector3 { x: 0.0, y: -0.15 * (damaged - 0.3), z: -0.05 * (damaged - 0.3) }
+            } else {
+                Vector3::zero()
+            };
             let wing_local = Vector3 { x: 0.0, y: body_h * 0.5 + 0.3, z: spoiler_z };
             d3.draw_model_ex(
                 &assets.carbon_cube_model,
-                vadd(pos, rotate_vector(wing_local, q)),
-                axis, angle_deg,
+                vadd(pos, rotate_vector(vadd(wing_local, wing_offset), q)),
+                axis, angle_deg + wing_rot,
                 Vector3 { x: body_w * 1.05, y: 0.06, z: 0.35 },
                 Color::WHITE, // Multiply by white to render the texture as-is
             );
@@ -738,16 +793,29 @@ pub fn draw_car(
         }
     }
 
-    // 7. Headlights & Taillights
-    let light_offsets_color = [
+    // 7. Headlights & Taillights (deform and flicker when damaged)
+    let mut light_offsets_color = [
         (Vector3 { x: body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
         (Vector3 { x: -body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
         (Vector3 { x: body_w * 0.4, y: 0.1, z: -body_l * 0.5 }, Color::new(220, 30, 30, 255)),
         (Vector3 { x: -body_w * 0.4, y: 0.1, z: -body_l * 0.5 }, Color::new(220, 30, 30, 255)),
     ];
+    if damaged > 0.3 {
+        light_offsets_color[0].0.y -= damaged * 0.2; // left headlight droops
+        light_offsets_color[0].0.z -= damaged * 0.1;
+        light_offsets_color[1].0.y -= damaged * 0.15; // right headlight droops
+        light_offsets_color[1].0.x += damaged * 0.08;
+        light_offsets_color[2].0.y -= damaged * 0.1;  // left taillight skewed
+        light_offsets_color[3].0.y -= damaged * 0.12; // right taillight skewed
+    }
     for (off, col) in light_offsets_color {
         let light_pos = vadd(pos, rotate_vector(off, q));
-        d3.draw_sphere(light_pos, 0.15, col);
+        let is_headlight = off.z > 0.0;
+        // Flickers if heavily damaged
+        let show_light = !is_headlight || damaged < 0.7 || (time * 18.0).sin() > 0.0;
+        if show_light {
+            d3.draw_sphere(light_pos, 0.15, col);
+        }
     }
 
     // Damage smoke wires

@@ -130,11 +130,11 @@ impl Ped {
 
                 // Snap cross-axis to sidewalk center.
                 if self.sw_axis == 0 {
-                    let line = origin + ((self.pos.z - origin) / bs).round() as f32 * bs;
+                    let line = origin + ((self.pos.z - origin) / bs).round() * bs;
                     let side = if self.pos.z >= line { sw_off } else { -sw_off };
                     self.pos.z = line + side;
                 } else {
-                    let line = origin + ((self.pos.x - origin) / bs).round() as f32 * bs;
+                    let line = origin + ((self.pos.x - origin) / bs).round() * bs;
                     let side = if self.pos.x >= line { sw_off } else { -sw_off };
                     self.pos.x = line + side;
                 }
@@ -148,7 +148,7 @@ impl Ped {
                     self.turn_cd = 2.0 + rand::random::<f32>() * 4.0;
                     let turn = rand::random::<u32>() % 5;
                     match turn {
-                        0 | 1 | 2 => {} // 60% continue straight
+                        0..=2 => {} // 60% continue straight
                         3 => {
                             // Turn: switch axis, random direction.
                             self.sw_axis = 1 - self.sw_axis;
