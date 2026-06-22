@@ -146,9 +146,9 @@ impl LightingSystem {
         );
         // Ambient = sky bottom color, dimmed more at night.
         let h = hour.rem_euclid(24.0);
-        let ambient_mult = if h < 6.0 || h > 20.0 {
+        let ambient_mult = if !(6.0..=20.0).contains(&h) {
             0.2 // Night: low ambient
-        } else if h < 8.0 || h > 18.0 {
+        } else if !(8.0..=18.0).contains(&h) {
             0.3 // Dawn/dusk
         } else {
             0.45 // Day: brighter ambient
@@ -171,10 +171,9 @@ impl LightingSystem {
             },
         );
         // Fog density: higher at night for atmosphere.
-        let h = hour.rem_euclid(24.0);
-        let density: f32 = if h < 6.0 || h > 20.0 {
+        let density: f32 = if !(6.0..=20.0).contains(&h) {
             0.015 // Night: thicker fog
-        } else if h < 8.0 || h > 18.0 {
+        } else if !(8.0..=18.0).contains(&h) {
             0.010 // Dawn/dusk: moderate
         } else {
             0.005 // Day: light fog
