@@ -270,14 +270,7 @@ impl<'a> Game<'a> {
                 };
                 self.camera.target = Vector3 { x: 0.0, y: 2.0, z: 0.0 };
 
-                if input.key_space_pressed || input.key_enter_pressed {
-                    self.screen_state = ScreenState::Intro;
-                    self.intro_dialog_idx = 0;
-                    self.intro_timer = 0.0;
-                    self.player.pos = Vector3 { x: 0.0, y: 0.0, z: 2.0 };
-                    self.player.yaw = 0.0;
-                    self.sfx.complete.play();
-                }
+                // Note: Title screen menu input (mouse/keyboard selection) is handled in render_title_screen
 
                 self.player.snapshot();
                 for v in self.vehicles.iter_mut() {
@@ -1478,18 +1471,24 @@ impl<'a> Game<'a> {
         }
     }
 
-    fn render_title_screen(&self, d: &mut RaylibDrawHandle) {
+    fn render_title_screen(&mut self, d: &mut RaylibDrawHandle) {
+        use raylib::consts::MouseButton;
+        use raylib::consts::KeyboardKey;
+
         let sw = d.get_screen_width();
         let sh = d.get_screen_height();
+        let mx = d.get_mouse_x();
+        let my = d.get_mouse_y();
+        let mouse_pressed = d.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
 
         // Dark tint overlay for atmospheric feel and text contrast
-        d.draw_rectangle(0, 0, sw, sh, Color::new(10, 10, 18, 110));
+        d.draw_rectangle(0, 0, sw, sh, Color::new(10, 10, 18, 120));
 
         // Glassmorphic panel for Logo
         let panel_w = 600;
-        let panel_h = 320;
+        let panel_h = 240;
         let panel_x = (sw - panel_w) / 2;
-        let panel_y = (sh - panel_h) / 2 - 40;
+        let panel_y = (sh - panel_h) / 2 - 130;
 
         d.draw_rectangle(panel_x, panel_y, panel_w, panel_h, Color::new(20, 20, 35, 180));
         d.draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, Color::new(0, 220, 255, 180));
@@ -1505,7 +1504,7 @@ impl<'a> Game<'a> {
         let st_w = d.measure_text(sub_title, st_size);
         let tag_w = d.measure_text(tagline, 24);
 
-        let start_y = panel_y + 40;
+        let start_y = panel_y + 35;
 
         // Shadow glow
         d.draw_text(main_title, panel_x + (panel_w - mt_w) / 2 + 3, start_y + 3, mt_size, Color::new(255, 0, 128, 120));
@@ -1514,28 +1513,105 @@ impl<'a> Game<'a> {
         d.draw_text(sub_title, panel_x + (panel_w - st_w) / 2 + 3, start_y + mt_size + 13, st_size, Color::new(0, 180, 255, 120));
         d.draw_text(sub_title, panel_x + (panel_w - st_w) / 2, start_y + mt_size + 10, st_size, Color::new(255, 200, 0, 255));
 
-        let div_y = start_y + mt_size + st_size + 25;
+        let div_y = start_y + mt_size + st_size + 20;
         d.draw_line(panel_x + 80, div_y, panel_x + panel_w - 80, div_y, Color::new(0, 220, 255, 150));
 
         // Tagline (bold neon pink)
-        d.draw_text(tagline, panel_x + (panel_w - tag_w) / 2 + 2, div_y + 17, 24, Color::new(0, 0, 0, 150));
-        d.draw_text(tagline, panel_x + (panel_w - tag_w) / 2, div_y + 15, 24, Color::new(255, 60, 140, 255));
+        d.draw_text(tagline, panel_x + (panel_w - tag_w) / 2 + 2, div_y + 12, 24, Color::new(0, 0, 0, 150));
+        d.draw_text(tagline, panel_x + (panel_w - tag_w) / 2, div_y + 10, 24, Color::new(255, 60, 140, 255));
 
-        // Pulsing prompt
-        let start_prompt = "PRESS [SPACE] OR [ENTER] TO START";
-        let p_size = 20;
-        let p_w = d.measure_text(start_prompt, p_size);
-        let alpha_pulse = (((self.time * 4.0).sin() * 0.5 + 0.5) * 200.0 + 55.0) as u8;
-        let prompt_color = Color::new(255, 255, 255, alpha_pulse);
-        let prompt_y = panel_y + panel_h + 40;
+        // --- MENU INTERACTION ---
+        let menu_w = 400;
+        let menu_h = 220;
+        let menu_x = (sw - menu_w) / 2;
+        let menu_y = panel_y + panel_h + 30;
 
-        d.draw_rectangle((sw - p_w - 60) / 2, prompt_y - 8, p_w + 60, p_size + 16, Color::new(10, 10, 25, 200));
-        d.draw_rectangle_lines((sw - p_w - 60) / 2, prompt_y - 8, p_w + 60, p_size + 16, Color::new(255, 60, 140, 100));
-        d.draw_text(start_prompt, (sw - p_w) / 2, prompt_y, p_size, prompt_color);
+        d.draw_rectangle(menu_x, menu_y, menu_w, menu_h, Color::new(15, 15, 25, 220));
+        d.draw_rectangle_lines(menu_x, menu_y, menu_w, menu_h, Color::new(255, 60, 140, 150));
+        d.draw_rectangle_lines(menu_x - 1, menu_y - 1, menu_w + 2, menu_h + 2, Color::new(255, 60, 140, 80));
 
-        let quit_prompt = "PRESS [ESC] TO QUIT GAME";
-        let q_w = d.measure_text(quit_prompt, 16);
-        d.draw_text(quit_prompt, (sw - q_w) / 2, sh - 45, 16, Color::new(160, 160, 180, 255));
+        let in_rect = |x: i32, y: i32, rx: i32, ry: i32, rw: i32, rh: i32| {
+            x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
+        };
+
+        let fs_label = if d.is_window_fullscreen() { "FULLSCREEN: ON" } else { "FULLSCREEN: OFF" };
+        let rate_label = format!("FRAMERATE: {}", self.cfg.logic_rate.label());
+        let menu_options = [
+            "START STORY",
+            fs_label,
+            &rate_label,
+            "EXIT GAME"
+        ];
+
+        // Navigate with UP/DOWN or W/S
+        if d.is_key_pressed(KeyboardKey::KEY_UP) || d.is_key_pressed(KeyboardKey::KEY_W) {
+            if self.intro_dialog_idx == 0 {
+                self.intro_dialog_idx = menu_options.len() - 1;
+            } else {
+                self.intro_dialog_idx -= 1;
+            }
+        }
+        if d.is_key_pressed(KeyboardKey::KEY_DOWN) || d.is_key_pressed(KeyboardKey::KEY_S) {
+            self.intro_dialog_idx = (self.intro_dialog_idx + 1) % menu_options.len();
+        }
+
+        // Clamp in case index got corrupted
+        if self.intro_dialog_idx >= menu_options.len() {
+            self.intro_dialog_idx = 0;
+        }
+
+        let item_h = 44;
+        let start_item_y = menu_y + 20;
+
+        for (i, opt) in menu_options.iter().enumerate() {
+            let item_y = start_item_y + i as i32 * item_h;
+            let opt_w = d.measure_text(opt, 20);
+            let opt_x = menu_x + (menu_w - opt_w) / 2;
+
+            let hovered = in_rect(mx, my, menu_x + 10, item_y, menu_w - 20, item_h - 8);
+            let selected = self.intro_dialog_idx == i;
+
+            if hovered {
+                self.intro_dialog_idx = i;
+            }
+
+            let text_color = if selected {
+                Color::new(0, 220, 255, 255)
+            } else {
+                Color::new(220, 220, 240, 255)
+            };
+
+            if selected {
+                d.draw_rectangle(menu_x + 15, item_y, menu_w - 30, item_h - 10, Color::new(255, 60, 140, 45));
+                d.draw_rectangle_lines(menu_x + 15, item_y, menu_w - 30, item_h - 10, Color::new(255, 60, 140, 120));
+            }
+
+            d.draw_text(opt, opt_x, item_y + 6, 20, text_color);
+
+            let triggered = (hovered && mouse_pressed) || (selected && (d.is_key_pressed(KeyboardKey::KEY_ENTER) || d.is_key_pressed(KeyboardKey::KEY_SPACE)));
+            if triggered {
+                match i {
+                    0 => {
+                        self.screen_state = ScreenState::Intro;
+                        self.intro_dialog_idx = 0;
+                        self.intro_timer = 0.0;
+                        self.player.pos = Vector3 { x: 0.0, y: 0.0, z: 2.0 };
+                        self.player.yaw = 0.0;
+                        self.sfx.complete.play();
+                    }
+                    1 => {
+                        self.pending_fullscreen = true;
+                    }
+                    2 => {
+                        self.cfg.logic_rate = self.cfg.logic_rate.next();
+                    }
+                    3 => {
+                        self.quit = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     fn render_intro_cutscene(&self, d: &mut RaylibDrawHandle) {
@@ -1551,45 +1627,50 @@ impl<'a> Game<'a> {
         d.draw_line(0, sh - bar_h, sw, sh - bar_h, Color::new(0, 200, 255, 100));
 
         if let Some(line) = INTRO_DIALOG.get(self.intro_dialog_idx) {
-            let box_w = (sw as f32 * 0.8) as i32;
-            let box_h = 100;
+            let box_w = (sw as f32 * 0.82) as i32;
+            let box_h = 135;
             let box_x = (sw - box_w) / 2;
-            let box_y = sh - bar_h - box_h - 20;
+            let box_y = sh - bar_h - box_h - 15;
 
-            d.draw_rectangle(box_x, box_y, box_w, box_h, Color::new(15, 15, 25, 230));
+            d.draw_rectangle(box_x, box_y, box_w, box_h, Color::new(15, 15, 25, 235));
             d.draw_rectangle_lines(box_x, box_y, box_w, box_h, Color::new(255, 60, 140, 180));
             d.draw_rectangle_lines(box_x - 1, box_y - 1, box_w + 2, box_h + 2, Color::new(255, 60, 140, 100));
 
-            let name_size = 20;
+            let name_size = 28;
+            let text_size = 22;
+            let text_color = Color::new(245, 245, 250, 255);
+
+            // Speaker name shadow + main
+            d.draw_text(line.speaker, box_x + 27, box_y + 17, name_size, Color::BLACK);
             d.draw_text(line.speaker, box_x + 25, box_y + 15, name_size, line.color);
 
-            let text_size = 18;
-            let text_color = Color::new(240, 240, 245, 255);
-
-            // Simple text wrapping
+            // Robust wrapping for large text
             let words = line.text.split(' ');
-            let mut line1 = String::new();
-            let mut line2 = String::new();
-            let mut using_line2 = false;
-
+            let mut wrapped_lines = Vec::new();
+            let mut current_line = String::new();
+            
             for word in words {
-                if !using_line2 {
-                    if line1.len() + word.len() + 1 < 75 {
-                        if !line1.is_empty() { line1.push(' '); }
-                        line1.push_str(word);
-                    } else {
-                        using_line2 = true;
-                        line2.push_str(word);
-                    }
+                if current_line.is_empty() {
+                    current_line.push_str(word);
+                } else if current_line.len() + word.len() < 52 {
+                    current_line.push(' ');
+                    current_line.push_str(word);
                 } else {
-                    if !line2.is_empty() { line2.push(' '); }
-                    line2.push_str(word);
+                    wrapped_lines.push(current_line);
+                    current_line = String::from(word);
                 }
             }
+            if !current_line.is_empty() {
+                wrapped_lines.push(current_line);
+            }
 
-            d.draw_text(&line1, box_x + 25, box_y + 45, text_size, text_color);
-            if !line2.is_empty() {
-                d.draw_text(&line2, box_x + 25, box_y + 68, text_size, text_color);
+            let mut text_y = box_y + 48;
+            for wrapped in wrapped_lines {
+                // Drop shadow
+                d.draw_text(&wrapped, box_x + 27, text_y + 2, text_size, Color::BLACK);
+                // Main text
+                d.draw_text(&wrapped, box_x + 25, text_y, text_size, text_color);
+                text_y += 28;
             }
 
             let prompt = "[SPACE] CONTINUE  /  [S] SKIP INTRO";

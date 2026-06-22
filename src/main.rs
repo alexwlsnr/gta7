@@ -22,13 +22,19 @@ fn main() {
     let mut clock = Clock::new(game.cfg.logic_rate);
 
     while !rl.window_should_close() {
-        // ESC toggles pause.
-        if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) && game.screen_state == gta7::game::ScreenState::Playing {
-            game.paused = !game.paused;
-            if game.paused {
-                rl.enable_cursor();
-            } else {
-                rl.disable_cursor();
+        // Sync cursor state based on game screen/pause state
+        if game.paused || game.screen_state == gta7::game::ScreenState::Title {
+            rl.enable_cursor();
+        } else {
+            rl.disable_cursor();
+        }
+
+        // ESC toggles pause in-game, or exits the game from the start menu.
+        if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+            if game.screen_state == gta7::game::ScreenState::Playing {
+                game.paused = !game.paused;
+            } else if game.screen_state == gta7::game::ScreenState::Title {
+                game.quit = true;
             }
         }
 
