@@ -36,6 +36,8 @@ pub struct Vehicle {
     pub occupied: bool,
     pub kind: VehicleKind,
     pub variant: VehicleVariant,
+    pub nitro: f32,
+    pub nitro_active: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -84,6 +86,8 @@ impl Vehicle {
             occupied: false,
             kind,
             variant,
+            nitro: 1.0,
+            nitro_active: false,
         }
     }
 
@@ -103,20 +107,34 @@ impl Vehicle {
 
         // 2. Accelerate / brake along forward direction
         let throttle = input.move_y;
-        let accel = 35.0;
-        let max_fwd = 30.0;
+        let mut accel = 35.0;
+        let mut max_fwd = 30.0;
         let max_rev = -12.0;
 
-        if throttle > 0.0 {
-            fwd_speed += accel * throttle * dt;
-        } else if throttle < 0.0 {
-            if fwd_speed > 0.1 {
-                fwd_speed += -55.0 * dt; // strong brake
-            } else {
-                fwd_speed += accel * throttle * dt; // reverse
-            }
+        self.nitro_active = false;
+        if input.sprint && self.nitro > 0.0 {
+            self.nitro_active = true;
+            self.nitro = (self.nitro - 0.45 * dt).max(0.0);
+            accel += 45.0;
+            max_fwd = 48.0;
+            
+            // Apply boost acceleration
+            let boost_throttle = if throttle >= 0.0 { throttle + 1.0 } else { throttle };
+            fwd_speed += accel * boost_throttle * dt;
         } else {
-            fwd_speed *= 1.0 - 1.2 * dt; // engine drag
+            self.nitro = (self.nitro + 0.15 * dt).min(1.0);
+            
+            if throttle > 0.0 {
+                fwd_speed += accel * throttle * dt;
+            } else if throttle < 0.0 {
+                if fwd_speed > 0.1 {
+                    fwd_speed += -55.0 * dt; // strong brake
+                } else {
+                    fwd_speed += accel * throttle * dt; // reverse
+                }
+            } else {
+                fwd_speed *= 1.0 - 1.2 * dt; // engine drag
+            }
         }
         fwd_speed = clamp(fwd_speed, max_rev, max_fwd);
 

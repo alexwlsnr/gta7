@@ -89,6 +89,23 @@ pub fn draw_hud(
     d.draw_rectangle_lines(bar_x, bar_y + 24, bar_w, bar_h, Color::new(200, 200, 200, 255));
     d.draw_text("AR", bar_x + 4, bar_y + 25, 14, Color::new(255, 255, 255, 230));
 
+    // Nitro bar (only when in vehicle)
+    if let Some(vi) = player.in_vehicle {
+        if let Some(car) = vehicles.get(vi) {
+            let nitro_y = bar_y - 24;
+            d.draw_rectangle(bar_x, nitro_y, bar_w, bar_h, Color::new(30, 30, 30, 200));
+            let nitro_w = (car.nitro * bar_w as f32) as i32;
+            let nitro_color = if car.nitro_active {
+                Color::new(0, 220, 255, 255) // active bright cyan
+            } else {
+                Color::new(0, 140, 200, 255) // charging blue
+            };
+            d.draw_rectangle(bar_x, nitro_y, nitro_w, bar_h, nitro_color);
+            d.draw_rectangle_lines(bar_x, nitro_y, bar_w, bar_h, Color::new(200, 200, 200, 255));
+            d.draw_text("NITRO", bar_x + 4, nitro_y + 1, 14, Color::new(255, 255, 255, 230));
+        }
+    }
+
     // --- Bottom-right: minimap ---
     let mm_size = 160;
     let mm_x = sw - mm_size - 20;

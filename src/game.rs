@@ -484,6 +484,56 @@ impl<'a> Game<'a> {
             }
             
             let car = &self.vehicles[vi];
+            
+            // Spawn nitro rocket trail particles out of the twin exhausts
+            if car.nitro_active {
+                let fwd = dir_from_yaw(car.yaw);
+                let right = Vector3 { x: -fwd.z, y: 0.0, z: fwd.x };
+                let body_l = match car.variant {
+                    VehicleVariant::Sports => 4.3,
+                    VehicleVariant::SUV => 4.4,
+                    VehicleVariant::Pickup => 4.6,
+                    VehicleVariant::Sedan => 4.2,
+                };
+                let rear_center = vsub(car.pos, vscale(fwd, body_l * 0.5));
+                let exhausts = [
+                    vadd(vsub(rear_center, vscale(right, 0.65)), Vector3 { x: 0.0, y: 0.2, z: 0.0 }),
+                    vadd(vadd(rear_center, vscale(right, 0.65)), Vector3 { x: 0.0, y: 0.2, z: 0.0 }),
+                ];
+
+                for &exhaust_pos in &exhausts {
+                    // Flame particles shoot backward from exhaust direction
+                    let flame_speed = 14.0;
+                    let spread_x = (rand::random::<f32>() - 0.5) * 1.5;
+                    let spread_y = (rand::random::<f32>() - 0.5) * 1.5;
+                    let spread_z = (rand::random::<f32>() - 0.5) * 1.5;
+                    let p_vel = Vector3 {
+                        x: car.vel.x - fwd.x * flame_speed + spread_x,
+                        y: car.vel.y - fwd.y * flame_speed + spread_y + 0.4,
+                        z: car.vel.z - fwd.z * flame_speed + spread_z,
+                    };
+
+                    let rand_val = rand::random::<f32>();
+                    let p_color = if rand_val < 0.65 {
+                        Color::new(0, 200, 255, 230) // bright cyan core
+                    } else if rand_val < 0.85 {
+                        Color::new(0, 80, 255, 180) // blue secondary
+                    } else {
+                        Color::new(245, 250, 255, 255) // white hot sparks
+                    };
+
+                    self.fx.particles.push(crate::render::fx::Particle {
+                        pos: exhaust_pos,
+                        vel: p_vel,
+                        life: 0.16 + rand::random::<f32>() * 0.12,
+                        max_life: 0.28,
+                        size: 0.16 + rand::random::<f32>() * 0.14,
+                        color: p_color,
+                        gravity: -1.0, // floats up slightly
+                    });
+                }
+            }
+
             let is_sliding = input.handbrake 
                 && car.speed.abs() > 4.0 
                 && car.pos.y <= self.city.get_ground_height(car.pos) + 0.05;
