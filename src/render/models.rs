@@ -481,6 +481,15 @@ pub fn draw_car(
     variant: VehicleVariant,
     time: f32,
 ) {
+    let (h_val, w_rad) = match variant {
+        VehicleVariant::Sports => (0.65, 0.38),
+        VehicleVariant::SUV => (1.1, 0.52),
+        VehicleVariant::Pickup => (0.9, 0.5),
+        VehicleVariant::Sedan => (0.8, 0.4),
+    };
+    let mut pos = pos;
+    pos.y += h_val * 0.5 + w_rad;
+
     let half_yaw = yaw * 0.5;
     let q_yaw = Quat {
         w: half_yaw.cos(),
