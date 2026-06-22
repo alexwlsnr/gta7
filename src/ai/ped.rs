@@ -25,6 +25,9 @@ pub struct Ped {
     pub has_glasses: bool,
     pub cash: i32,
     pub wander_timer: f32,
+    pub sw_axis: i32,   // 0 = walk along X, 1 = walk along Z
+    pub sw_dir: f32,    // +1 or -1
+    pub turn_cd: f32,   // cooldown between turns at intersections
     pub flee_dir: Vector3,
 }
 
@@ -67,6 +70,9 @@ impl Ped {
             has_glasses,
             cash: (rand::random::<u32>() % 80) as i32 + 10,
             wander_timer: rand::random::<f32>() * 3.0,
+            sw_axis: (rand::random::<u32>() % 2) as i32,
+            sw_dir: if rand::random::<f32>() < 0.5 { 1.0 } else { -1.0 },
+            turn_cd: 0.0,
             flee_dir: Vector3 { x: 0.0, y: 0.0, z: 0.0 },
         }
     }
@@ -107,14 +113,51 @@ impl Ped {
                         return;
                     }
                 }
-                self.wander_timer -= dt;
-                if self.wander_timer <= 0.0 {
-                    self.wander_timer = 2.0 + rand::random::<f32>() * 3.0;
-                    self.yaw = rand::random::<f32>() * std::f32::consts::TAU;
-                }
-                let fwd = dir_from_yaw(self.yaw);
                 let speed = 2.0;
+                let origin = -city.ground_half;
+                let bs = city.block_size;
+                let sw_off = city.road_width * 0.5 + city.sidewalk_width * 0.5;
+
+                // Walk along current axis.
+                let fwd = if self.sw_axis == 0 {
+                    Vector3 { x: self.sw_dir, y: 0.0, z: 0.0 }
+                } else {
+                    Vector3 { x: 0.0, y: 0.0, z: self.sw_dir }
+                };
+                let prev_walk = if self.sw_axis == 0 { self.pos.x } else { self.pos.z };
                 self.pos = vadd(self.pos, vscale(fwd, speed * dt));
+                self.yaw = yaw_from_dir(fwd);
+
+                // Snap cross-axis to sidewalk center.
+                if self.sw_axis == 0 {
+                    let line = origin + ((self.pos.z - origin) / bs).round() as f32 * bs;
+                    let side = if self.pos.z >= line { sw_off } else { -sw_off };
+                    self.pos.z = line + side;
+                } else {
+                    let line = origin + ((self.pos.x - origin) / bs).round() as f32 * bs;
+                    let side = if self.pos.x >= line { sw_off } else { -sw_off };
+                    self.pos.x = line + side;
+                }
+
+                // At intersections, maybe turn.
+                self.turn_cd -= dt;
+                let cur_walk = if self.sw_axis == 0 { self.pos.x } else { self.pos.z };
+                let prev_block = ((prev_walk - origin) / bs).floor() as i32;
+                let cur_block = ((cur_walk - origin) / bs).floor() as i32;
+                if prev_block != cur_block && self.turn_cd <= 0.0 {
+                    self.turn_cd = 2.0 + rand::random::<f32>() * 4.0;
+                    let turn = rand::random::<u32>() % 5;
+                    match turn {
+                        0 | 1 | 2 => {} // 60% continue straight
+                        3 => {
+                            // Turn: switch axis, random direction.
+                            self.sw_axis = 1 - self.sw_axis;
+                            self.sw_dir = if rand::random::<f32>() < 0.5 { 1.0 } else { -1.0 };
+                        }
+                        4 => { self.sw_dir *= -1.0; } // Reverse
+                        _ => {}
+                    }
+                }
             }
             PedState::Flee => {
                 let fwd = dir_from_yaw(self.yaw);
@@ -125,6 +168,13 @@ impl Ped {
                 if self.wander_timer < -4.0 {
                     self.state = PedState::Wander;
                     self.wander_timer = 2.0;
+                    self.turn_cd = 1.0;
+                    // Snap to nearest sidewalk.
+                    let (sw_pos, axis) = city.nearest_sidewalk(self.pos.x, self.pos.z);
+                    self.pos.x = sw_pos.x;
+                    self.pos.z = sw_pos.z;
+                    self.sw_axis = axis;
+                    self.sw_dir = if rand::random::<f32>() < 0.5 { 1.0 } else { -1.0 };
                 }
             }
             PedState::Dead => {}

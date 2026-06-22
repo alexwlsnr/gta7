@@ -133,6 +133,36 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         );
     }
 
+    // Sidewalks: strips parallel to roads, offset on each side.
+    let sw = cfg.sidewalk_width;
+    let sw_off = cfg.sidewalk_offset();
+    let sw_col = p.sidewalk();
+    for i in 0..=n {
+        let line = origin + i as f32 * bs;
+        // Horizontal roads (along X): sidewalks at z = line ± sw_off
+        d3.draw_plane(
+            Vector3 { x: 0.0, y: 0.02, z: line - sw_off },
+            Vector2::new(half * 2.0, sw),
+            sw_col,
+        );
+        d3.draw_plane(
+            Vector3 { x: 0.0, y: 0.02, z: line + sw_off },
+            Vector2::new(half * 2.0, sw),
+            sw_col,
+        );
+        // Vertical roads (along Z): sidewalks at x = line ± sw_off
+        d3.draw_plane(
+            Vector3 { x: line - sw_off, y: 0.02, z: 0.0 },
+            Vector2::new(sw, half * 2.0),
+            sw_col,
+        );
+        d3.draw_plane(
+            Vector3 { x: line + sw_off, y: 0.02, z: 0.0 },
+            Vector2::new(sw, half * 2.0),
+            sw_col,
+        );
+    }
+
     // Lane center dashes (yellow).
     let yellow = Color::new(220, 190, 70, 255);
     for lane in &city.lanes {

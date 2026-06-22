@@ -87,13 +87,11 @@ impl<'a> Game<'a> {
             Color::new(100, 200, 120, 255),
         ];
         for _ in 0..cfg.max_peds {
-            let angle = rand::random::<f32>() * std::f32::consts::TAU;
-            let dist = rand::random::<f32>() * 80.0 + 10.0;
-            let pos = Vector3 {
-                x: (angle.cos() * dist).clamp(-cfg.world_half() + 5.0, cfg.world_half() - 5.0),
-                y: 0.0,
-                z: (angle.sin() * dist).clamp(-cfg.world_half() + 5.0, cfg.world_half() - 5.0),
-            };
+            // Spawn on a random sidewalk: pick a random grid line and offset.
+            let (pos, _axis) = city.nearest_sidewalk(
+                rand::random::<f32>() * cfg.world_half() * 2.0 - cfg.world_half(),
+                rand::random::<f32>() * cfg.world_half() * 2.0 - cfg.world_half(),
+            );
             let col = ped_colors[rand::random::<usize>() % ped_colors.len()];
             peds.push(Ped::new(pos, col));
         }
@@ -307,10 +305,10 @@ impl<'a> Game<'a> {
                 let mut wr_from = prev_wr_pos;
                 let mut wr_to = cur_wr_pos;
 
-                wl_from.y = wl_from_ground + 0.015;
-                wl_to.y = wl_to_ground + 0.015;
-                wr_from.y = wr_from_ground + 0.015;
-                wr_to.y = wr_to_ground + 0.015;
+                wl_from.y = wl_from_ground + 0.04;
+                wl_to.y = wl_to_ground + 0.04;
+                wr_from.y = wr_from_ground + 0.04;
+                wr_to.y = wr_to_ground + 0.04;
 
                 self.fx.add_skidmark(wl_from, wl_to, 0.35, 10.0);
                 self.fx.add_skidmark(wr_from, wr_to, 0.35, 10.0);
@@ -400,11 +398,10 @@ impl<'a> Game<'a> {
         while self.peds.len() < self.cfg.max_peds {
             let angle = rand::random::<f32>() * std::f32::consts::TAU;
             let dist = rand::random::<f32>() * 40.0 + 50.0;
-            let pos = Vector3 {
-                x: (self.player.pos.x + angle.cos() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
-                y: 0.0,
-                z: (self.player.pos.z + angle.sin() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
-            };
+            let (pos, _axis) = self.city.nearest_sidewalk(
+                (self.player.pos.x + angle.cos() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
+                (self.player.pos.z + angle.sin() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
+            );
             let col = Color::new(
                 100 + (rand::random::<u32>() % 120) as u8,
                 100 + (rand::random::<u32>() % 120) as u8,
@@ -687,7 +684,7 @@ impl<'a> Game<'a> {
         if spawn_target {
             // Spawn a target ped near the marker.
             let marker = self.mission.marker;
-            let pos = vadd(marker, Vector3 { x: 5.0, y: 0.0, z: 5.0 });
+            let (pos, _axis) = self.city.nearest_sidewalk(marker.x + 5.0, marker.z + 5.0);
             let mut target = Ped::new(pos, Color::new(255, 80, 80, 255));
             target.cash = 0;
             self.peds.push(target);

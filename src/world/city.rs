@@ -50,6 +50,7 @@ pub struct City {
     pub blocks: usize,
     pub block_size: f32,
     pub road_width: f32,
+    pub sidewalk_width: f32,
     pub buildings: Vec<Building>,
     /// Flattened grid: which lots are parks.
     pub parks: Vec<bool>,
@@ -186,6 +187,7 @@ impl City {
             blocks: n,
             block_size: bs,
             road_width: rw,
+            sidewalk_width: cfg.sidewalk_width,
             buildings,
             parks,
             lanes,
@@ -332,6 +334,55 @@ impl City {
         near_x_line || near_z_line
     }
 
+    /// Is a world position on a sidewalk strip (between road edge and building lot)?
+    pub fn on_sidewalk(&self, x: f32, z: f32) -> bool {
+        let origin = -self.ground_half;
+        let lx = (x - origin).rem_euclid(self.block_size);
+        let lz = (z - origin).rem_euclid(self.block_size);
+        let dx = lx.min(self.block_size - lx);
+        let dz = lz.min(self.block_size - lz);
+        let r = self.road_width * 0.5;
+        let sw = self.sidewalk_width;
+        // On sidewalk if within the sidewalk band of a grid line in one axis
+        // and not inside a road in the other.
+        let on_sw_x = dx >= r && dx <= r + sw;
+        let on_sw_z = dz >= r && dz <= r + sw;
+        on_sw_x || on_sw_z
+    }
+
+    /// Snap a position to the nearest sidewalk center point.
+    /// Returns the sidewalk position and the direction the sidewalk runs (0 = along X, 1 = along Z).
+    pub fn nearest_sidewalk(&self, x: f32, z: f32) -> (Vector3, i32) {
+        let origin = -self.ground_half;
+        let lx = (x - origin).rem_euclid(self.block_size);
+        let lz = (z - origin).rem_euclid(self.block_size);
+        // Distance to nearest grid line in each axis
+        let dx_low = lx;
+        let dx_high = self.block_size - lx;
+        let dz_low = lz;
+        let dz_high = self.block_size - lz;
+        let r = self.road_width * 0.5;
+        let sw_off = r + self.sidewalk_width * 0.5;
+
+        // Find closest sidewalk: compare nearest X-line sidewalk vs Z-line sidewalk
+        let dx_nearest = dx_low.min(dx_high);
+        let dz_nearest = dz_low.min(dz_high);
+
+        if dx_nearest <= dz_nearest {
+            // Snap to sidewalk along an X grid line (sidewalk runs in X direction)
+            let grid_i = ((x - origin) / self.block_size).round() as i32;
+            let line = origin + grid_i as f32 * self.block_size;
+            let side = if z >= line { sw_off } else { -sw_off };
+            (Vector3 { x, y: 0.0, z: line + side }, 0)
+        } else {
+            // Snap to sidewalk along a Z grid line (sidewalk runs in Z direction)
+            let grid_j = ((z - origin) / self.block_size).round() as i32;
+            let line = origin + grid_j as f32 * self.block_size;
+            let side = if x >= line { sw_off } else { -sw_off };
+            (Vector3 { x: line + side, y: 0.0, z }, 1)
+        }
+    }
+
     pub fn step_lights(&mut self, dt: f32) {
         for l in &mut self.lights {
             l.timer -= dt;
@@ -370,5 +421,44 @@ mod tests {
         // Almost certainly different.
         assert!(a.buildings.len() != b.buildings.len()
             || a.buildings.first().map(|b| b.color_index) != b.buildings.first().map(|b| b.color_index));
+    }
+
+    #[test]
+    fn sidewalk_detection() {
+        let cfg = Config { seed: 42, city_blocks: 6, ..Config::default() };
+        let city = City::generate(&cfg);
+        let r = cfg.road_width * 0.5;
+        let sw = cfg.sidewalk_width;
+        // Center of a road (on a grid line) — not sidewalk.
+        assert!(!city.on_sidewalk(0.0, 0.0));
+        // In the sidewalk band (between road edge and lot edge).
+        let sw_mid = r + sw * 0.5;
+        assert!(city.on_sidewalk(0.0, sw_mid));
+        assert!(city.on_sidewalk(sw_mid, 0.0 + r + 0.1));
+        // Deep inside a block — not sidewalk.
+        let lot_mid = cfg.block_size * 0.5;
+        assert!(!city.on_sidewalk(lot_mid, lot_mid));
+    }
+
+    #[test]
+    fn nearest_sidewalk_snaps() {
+        let cfg = Config { seed: 42, city_blocks: 6, ..Config::default() };
+        let city = City::generate(&cfg);
+        let sw_off = cfg.road_width * 0.5 + cfg.sidewalk_width * 0.5;
+        // A point near the center should snap to a sidewalk.
+        let (pos, axis) = city.nearest_sidewalk(3.0, 3.0);
+        // The snapped position should be on a sidewalk.
+        assert!(city.on_sidewalk(pos.x, pos.z), "snapped pos {:?} not on sidewalk", pos);
+        // Axis should be 0 or 1.
+        assert!(axis == 0 || axis == 1);
+        // The cross-axis should be at grid_line ± sw_off.
+        let origin = -city.ground_half;
+        if axis == 0 {
+            let line = origin + ((pos.z - origin) / city.block_size).round() as f32 * city.block_size;
+            assert!((pos.z - line).abs() - sw_off < 0.1);
+        } else {
+            let line = origin + ((pos.x - origin) / city.block_size).round() as f32 * city.block_size;
+            assert!((pos.x - line).abs() - sw_off < 0.1);
+        }
     }
 }

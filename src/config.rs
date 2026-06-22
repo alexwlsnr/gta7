@@ -46,6 +46,7 @@ pub struct Config {
     pub seed: u64,
     pub city_blocks: usize,   // grid is N x N blocks
     pub block_size: f32,      // size of a full block incl. road (meters)
+    pub sidewalk_width: f32,  // sidewalk strip between road and building lots
     pub road_width: f32,      // drivable road width
     pub max_peds: usize,
     pub max_traffic: usize,
@@ -61,6 +62,7 @@ impl Default for Config {
             seed: 1337,
             city_blocks: 10,
             block_size: 60.0,
+            sidewalk_width: 4.0,
             road_width: 12.0,
             max_peds: 40,
             max_traffic: 24,
@@ -73,11 +75,15 @@ impl Default for Config {
 impl Config {
     /// Half extent of a building lot (sidewalk inset on each side).
     pub fn lot_half(&self) -> f32 {
-        (self.block_size - self.road_width) * 0.5
+        (self.block_size - self.road_width) * 0.5 - self.sidewalk_width
     }
     /// Road width half.
     pub fn road_half(&self) -> f32 {
         self.road_width * 0.5
+    }
+    /// Sidewalk center offset from road centerline.
+    pub fn sidewalk_offset(&self) -> f32 {
+        self.road_half() + self.sidewalk_width * 0.5
     }
     pub fn world_half(&self) -> f32 {
         self.block_size * (self.city_blocks as f32) * 0.5
@@ -91,7 +97,7 @@ impl Config {
 pub struct Palette;
 impl Palette {
     pub fn road(&self) -> Color { Color::new(72, 72, 78, 255) }
-    pub fn sidewalk(&self) -> Color { Color::new(120, 122, 128, 255) }
+    pub fn sidewalk(&self) -> Color { Color::new(150, 148, 145, 255) }
     pub fn grass(&self) -> Color { Color::new(54, 110, 60, 255) }
     pub fn building(&self, i: u32) -> Color {
         // Deterministic muted building colors.
