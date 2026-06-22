@@ -454,10 +454,10 @@ mod tests {
         // The cross-axis should be at grid_line ± sw_off.
         let origin = -city.ground_half;
         if axis == 0 {
-            let line = origin + ((pos.z - origin) / city.block_size).round() as f32 * city.block_size;
+            let line = origin + ((pos.z - origin) / city.block_size).round() * city.block_size;
             assert!((pos.z - line).abs() - sw_off < 0.1);
         } else {
-            let line = origin + ((pos.x - origin) / city.block_size).round() as f32 * city.block_size;
+            let line = origin + ((pos.x - origin) / city.block_size).round() * city.block_size;
             assert!((pos.x - line).abs() - sw_off < 0.1);
         }
     }

@@ -21,6 +21,9 @@ pub struct Input {
     pub interact: bool,
     pub switch_weapon: bool,
     pub melee: bool,
+    pub key_space_pressed: bool,
+    pub key_enter_pressed: bool,
+    pub key_s_pressed: bool,
 }
 
 impl Input {
@@ -51,6 +54,10 @@ impl Input {
         i.switch_weapon = rl.is_key_pressed(KeyboardKey::KEY_TAB)
             || rl.is_key_pressed(KeyboardKey::KEY_Q);
         i.melee = rl.is_key_pressed(KeyboardKey::KEY_V);
+        i.key_space_pressed = rl.is_key_pressed(KeyboardKey::KEY_SPACE);
+        i.key_enter_pressed = rl.is_key_pressed(KeyboardKey::KEY_ENTER)
+            || rl.is_key_pressed(KeyboardKey::KEY_KP_ENTER);
+        i.key_s_pressed = rl.is_key_pressed(KeyboardKey::KEY_S);
         i
     }
 
@@ -63,5 +70,8 @@ impl Input {
         self.interact = false;
         self.switch_weapon = false;
         self.melee = false;
+        self.key_space_pressed = false;
+        self.key_enter_pressed = false;
+        self.key_s_pressed = false;
     }
 }

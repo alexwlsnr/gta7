@@ -23,7 +23,7 @@ fn main() {
 
     while !rl.window_should_close() {
         // ESC toggles pause.
-        if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) {
+        if rl.is_key_pressed(KeyboardKey::KEY_ESCAPE) && game.screen_state == gta7::game::ScreenState::Playing {
             game.paused = !game.paused;
             if game.paused {
                 rl.enable_cursor();

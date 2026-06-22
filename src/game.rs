@@ -19,6 +19,71 @@ use crate::mission::MissionState;
 use crate::render::models::{Assets, draw_world, draw_car, draw_character, draw_pickup, draw_mission_marker, draw_shadow_casters};
 use crate::render::fx::Fx;
 use crate::hud;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenState {
+    Title,
+    Intro,
+    Playing,
+}
+
+struct DialogLine {
+    speaker: &'static str,
+    text: &'static str,
+    color: Color,
+}
+
+const INTRO_DIALOG: &[DialogLine] = &[
+    DialogLine {
+        speaker: "OFFICER KOWALSKI",
+        text: "Well, well. Look who's back on the streets of Silicon Valley. Jimmy 'The Compiler' Vance.",
+        color: Color { r: 60, g: 150, b: 255, a: 255 }, // Blue
+    },
+    DialogLine {
+        speaker: "JIMMY VANCE",
+        text: "Hey, Kowalski. I served my sentence. I'm clean now. Just trying to compile some Rust.",
+        color: Color { r: 100, g: 255, b: 100, a: 255 }, // Green
+    },
+    DialogLine {
+        speaker: "OFFICER KOWALSKI",
+        text: "Clean? A clean compile is a myth in this city, Jimmy. I've got my eyes on you.",
+        color: Color { r: 60, g: 150, b: 255, a: 255 },
+    },
+    DialogLine {
+        speaker: "JIMMY VANCE",
+        text: "I'm just a freelance developer now, Kowalski. No more illegal pointer arithmetic.",
+        color: Color { r: 100, g: 255, b: 100, a: 255 },
+    },
+    DialogLine {
+        speaker: "OFFICER KOWALSKI",
+        text: "You think you can dereference raw pointers in my district and get away with it?",
+        color: Color { r: 60, g: 150, b: 255, a: 255 },
+    },
+    DialogLine {
+        speaker: "JIMMY VANCE",
+        text: "It was a safe abstraction, Kowalski! You set me up!",
+        color: Color { r: 100, g: 255, b: 100, a: 255 },
+    },
+    DialogLine {
+        speaker: "OFFICER KOWALSKI",
+        text: "Save the stack trace for the judge. I catch you garbage collecting without a license...",
+        color: Color { r: 60, g: 150, b: 255, a: 255 },
+    },
+    DialogLine {
+        speaker: "JIMMY VANCE",
+        text: "Yeah, yeah. What's the catch? Why am I out of the sandbox?",
+        color: Color { r: 100, g: 255, b: 100, a: 255 },
+    },
+    DialogLine {
+        speaker: "OFFICER KOWALSKI",
+        text: "Let's just say a thread got terminated early. Now get out of my sight before I panic!",
+        color: Color { r: 60, g: 150, b: 255, a: 255 },
+    },
+    DialogLine {
+        speaker: "JIMMY VANCE",
+        text: "Still the same old Kowalski. Time to boot up the IDE and see who's still online.",
+        color: Color { r: 100, g: 255, b: 100, a: 255 },
+    },
+];
 
 pub struct Game<'a> {
     pub cfg: Config,
@@ -46,6 +111,9 @@ pub struct Game<'a> {
     pub pending_fullscreen: bool,
     pub sfx: crate::sound::SoundEffects<'a>,
     pub lighting: crate::render::lighting::LightingSystem,
+    pub screen_state: ScreenState,
+    pub intro_dialog_idx: usize,
+    pub intro_timer: f32,
 }
 
 impl<'a> Game<'a> {
@@ -87,6 +155,14 @@ impl<'a> Game<'a> {
             ];
             vehicles.push(Vehicle::new(pos, angle, colors[i], VehicleKind::Civilian));
         }
+
+        // Spawn the parked police car for the intro cutscene
+        vehicles.push(Vehicle::new(
+            Vector3 { x: 3.2, y: 0.0, z: 3.5 },
+            2.3,
+            Color::new(20, 20, 20, 255),
+            VehicleKind::Police,
+        ));
 
         // Spawn pedestrians.
         let mut peds = Vec::new();
@@ -163,11 +239,117 @@ impl<'a> Game<'a> {
             pending_fullscreen: false,
             lighting,
             sfx,
+            screen_state: ScreenState::Title,
+            intro_dialog_idx: 0,
+            intro_timer: 0.0,
         }
     }
 
     /// One fixed-timestep logic step.
     pub fn update(&mut self, input: &mut Input, dt: f32) {
+        match self.screen_state {
+            ScreenState::Title => {
+                self.time += dt;
+                self.fx.step(dt);
+                self.city.step_lights(dt);
+
+                // Update traffic so city feels alive
+                let player_pos = self.player.pos;
+                for tc in self.traffic.iter_mut() {
+                    tc.update(&self.city, &mut self.vehicles, player_pos, dt);
+                }
+
+                // Slow orbit of camera around city center
+                let orbit_radius = 55.0;
+                let speed = 0.12;
+                let angle = self.time * speed;
+                self.camera.pos = Vector3 {
+                    x: angle.cos() * orbit_radius,
+                    y: 22.0 + (angle * 2.0).sin() * 5.0,
+                    z: angle.sin() * orbit_radius,
+                };
+                self.camera.target = Vector3 { x: 0.0, y: 2.0, z: 0.0 };
+
+                if input.key_space_pressed || input.key_enter_pressed {
+                    self.screen_state = ScreenState::Intro;
+                    self.intro_dialog_idx = 0;
+                    self.intro_timer = 0.0;
+                    self.player.pos = Vector3 { x: 0.0, y: 0.0, z: 2.0 };
+                    self.player.yaw = 0.0;
+                    self.sfx.complete.play();
+                }
+
+                self.player.snapshot();
+                for v in self.vehicles.iter_mut() {
+                    v.snapshot();
+                }
+                for ped in self.peds.iter_mut() {
+                    ped.snapshot();
+                }
+                input.drain_edges();
+                return;
+            }
+            ScreenState::Intro => {
+                self.time += dt;
+                self.fx.step(dt);
+                self.city.step_lights(dt);
+
+                // Keep player positioned outside jail (stationary)
+                self.player.pos = Vector3 { x: 0.0, y: 0.0, z: 2.0 };
+                self.player.yaw = 0.0;
+                self.player.vel = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+
+                self.intro_timer += dt;
+
+                let next_dialog = input.key_space_pressed || input.key_enter_pressed || self.intro_timer >= 5.0;
+                let skip = input.key_s_pressed;
+
+                if skip {
+                    self.screen_state = ScreenState::Playing;
+                    self.sfx.complete.play();
+                } else if next_dialog {
+                    self.intro_dialog_idx += 1;
+                    self.intro_timer = 0.0;
+                    if self.intro_dialog_idx >= INTRO_DIALOG.len() {
+                        self.screen_state = ScreenState::Playing;
+                        self.sfx.complete.play();
+                    } else {
+                        self.sfx.enter_exit.play();
+                    }
+                }
+
+                // Cinematic camera orbiting Jimmy and Kowalski
+                let jimmy_pos = Vector3 { x: 0.0, y: 0.0, z: 2.0 };
+                let kowalski_pos = Vector3 { x: 0.0, y: 0.0, z: 4.5 };
+                let center = Vector3 {
+                    x: (jimmy_pos.x + kowalski_pos.x) * 0.5,
+                    y: 1.1,
+                    z: (jimmy_pos.z + kowalski_pos.z) * 0.5,
+                };
+                
+                let orbit_radius = 4.5;
+                let speed = 0.18;
+                let angle = self.time * speed;
+                self.camera.pos = Vector3 {
+                    x: center.x + angle.cos() * orbit_radius,
+                    y: 1.5 + (self.time * 0.5).sin() * 0.15,
+                    z: center.z + angle.sin() * orbit_radius,
+                };
+                self.camera.target = center;
+
+                self.player.snapshot();
+                for v in self.vehicles.iter_mut() {
+                    v.snapshot();
+                }
+                for ped in self.peds.iter_mut() {
+                    ped.snapshot();
+                }
+                input.drain_edges();
+                return;
+            }
+            ScreenState::Playing => {}
+        }
+
         self.time += dt;
         self.fx.step(dt);
         self.city.step_lights(dt);
@@ -1096,20 +1278,24 @@ impl<'a> Game<'a> {
             draw_world(&mut d3, &self.city, &self.assets, &self.cfg, total_hours, cam_pos);
 
             // Pickups.
-            for p in &self.pickups {
-                if p.active {
-                    draw_pickup(&mut d3, p.pos, p.color(), self.time);
+            if self.screen_state == ScreenState::Playing {
+                for p in &self.pickups {
+                    if p.active {
+                        draw_pickup(&mut d3, p.pos, p.color(), self.time);
+                    }
                 }
             }
 
             // Mission marker.
-            if self.mission.has_active_marker() {
+            if self.screen_state == ScreenState::Playing && self.mission.has_active_marker() {
                 draw_mission_marker(&mut d3, self.mission.marker, Color::new(255, 80, 255, 255), self.time);
             }
 
             // Shop markers.
-            for shop in &self.shops {
-                draw_mission_marker(&mut d3, shop.pos, Color::new(80, 200, 255, 255), self.time + 1.5);
+            if self.screen_state == ScreenState::Playing {
+                for shop in &self.shops {
+                    draw_mission_marker(&mut d3, shop.pos, Color::new(80, 200, 255, 255), self.time + 1.5);
+                }
             }
 
             // Vehicles.
@@ -1134,49 +1320,53 @@ impl<'a> Game<'a> {
             }
 
             // Peds.
-            for ped in &self.peds {
-                let rp = ped.render_pos(alpha);
-                let ry = ped.render_yaw(alpha);
-                let is_moving = !ped.dead();
-                draw_character(
-                    &mut d3,
-                    &self.assets,
-                    rp,
-                    ry,
-                    ped.color,
-                    ped.pants_color,
-                    ped.hair_color,
-                    ped.hair_style,
-                    ped.has_glasses,
-                    ped.dead(),
-                    self.time,
-                    is_moving,
-                );
+            if self.screen_state == ScreenState::Playing {
+                for ped in &self.peds {
+                    let rp = ped.render_pos(alpha);
+                    let ry = ped.render_yaw(alpha);
+                    let is_moving = !ped.dead();
+                    draw_character(
+                        &mut d3,
+                        &self.assets,
+                        rp,
+                        ry,
+                        ped.color,
+                        ped.pants_color,
+                        ped.hair_color,
+                        ped.hair_style,
+                        ped.has_glasses,
+                        ped.dead(),
+                        self.time,
+                        is_moving,
+                    );
+                }
             }
 
             // Cops (blue uniform).
-            for cop in &self.cops {
-                let rp = cop.render_pos(alpha);
-                let ry = cop.render_yaw(alpha);
-                let is_moving = !cop.dead() && cop.state == crate::ai::cop::CopState::Chase;
-                draw_character(
-                    &mut d3,
-                    &self.assets,
-                    rp,
-                    ry,
-                    Color::new(30, 45, 110, 255), // Shirt
-                    Color::new(20, 20, 20, 255),   // Pants
-                    Color::new(20, 30, 80, 255),   // Hat color
-                    crate::render::models::HairStyle::PoliceHat,
-                    false,
-                    cop.dead(),
-                    self.time,
-                    is_moving,
-                );
+            if self.screen_state == ScreenState::Playing {
+                for cop in &self.cops {
+                    let rp = cop.render_pos(alpha);
+                    let ry = cop.render_yaw(alpha);
+                    let is_moving = !cop.dead() && cop.state == crate::ai::cop::CopState::Chase;
+                    draw_character(
+                        &mut d3,
+                        &self.assets,
+                        rp,
+                        ry,
+                        Color::new(30, 45, 110, 255), // Shirt
+                        Color::new(20, 20, 20, 255),   // Pants
+                        Color::new(20, 30, 80, 255),   // Hat color
+                        crate::render::models::HairStyle::PoliceHat,
+                        false,
+                        cop.dead(),
+                        self.time,
+                        is_moving,
+                    );
+                }
             }
 
             // Player (signature green shirt, jeans, red cap, sunglasses).
-            if self.player.in_vehicle.is_none() && self.player.alive {
+            if self.screen_state != ScreenState::Title && self.player.in_vehicle.is_none() && self.player.alive {
                 let rp = self.player.render_pos(alpha);
                 let ry = self.player.render_yaw(alpha);
                 let is_moving = vlen_xz(self.player.vel) > 0.1;
@@ -1196,60 +1386,215 @@ impl<'a> Game<'a> {
                 );
             }
 
+            // During Intro, draw Officer Kowalski explicitly.
+            if self.screen_state == ScreenState::Intro {
+                let kowalski_pos = Vector3 { x: 0.0, y: 0.0, z: 4.5 };
+                let kowalski_yaw = std::f32::consts::PI; // facing Jimmy
+                draw_character(
+                    &mut d3,
+                    &self.assets,
+                    kowalski_pos,
+                    kowalski_yaw,
+                    Color::new(30, 45, 110, 255), // Police blue shirt
+                    Color::new(20, 20, 20, 255),   // Black pants
+                    Color::new(20, 30, 80, 255),   // Police hat
+                    crate::render::models::HairStyle::PoliceHat,
+                    false,
+                    false, // alive
+                    self.time,
+                    false, // not moving
+                );
+            }
+
             // FX.
-            self.fx.draw(&mut d3);
+            if self.screen_state == ScreenState::Playing {
+                self.fx.draw(&mut d3);
+            }
         }
 
         // HUD (2D).
-        let cam_pos = self.camera.pos;
-        let cam_yaw = self.camera.yaw;
-        hud::draw_hud(
-            &mut d,
-            &self.player,
-            &self.wanted,
-            &self.mission,
-            &self.vehicles,
-            &self.city,
-            &self.cfg,
-            cam_pos, cam_yaw,
-            &self.assets,
-            rate_label,
-            debug,
-            fps,
-        );
+        if self.screen_state == ScreenState::Playing {
+            let cam_pos = self.camera.pos;
+            let cam_yaw = self.camera.yaw;
+            hud::draw_hud(
+                &mut d,
+                &self.player,
+                &self.wanted,
+                &self.mission,
+                &self.vehicles,
+                &self.city,
+                &self.cfg,
+                cam_pos, cam_yaw,
+                &self.assets,
+                rate_label,
+                debug,
+                fps,
+            );
+        }
 
         // Draw floating vehicle health bars above damaged vehicles.
-        for (screen_pos, hp_ratio) in vehicle_health_bars {
-            let bar_w = 46;
-            let bar_h = 6;
-            let bx = (screen_pos.x as i32) - bar_w / 2;
-            let by = (screen_pos.y as i32) - bar_h / 2;
-            
-            // Background
-            d.draw_rectangle(bx, by, bar_w, bar_h, Color::new(40, 40, 40, 180));
-            // Health color (Red for fire <=20%, Orange <=50%, Green fine)
-            let color = if hp_ratio <= 0.20 {
-                Color::new(230, 40, 40, 255)
-            } else if hp_ratio <= 0.50 {
-                Color::new(230, 130, 30, 255)
-            } else {
-                Color::new(40, 200, 60, 255)
-            };
-            let hp_w = (hp_ratio * (bar_w - 2) as f32) as i32;
-            d.draw_rectangle(bx + 1, by + 1, hp_w.max(0).min(bar_w - 2), bar_h - 2, color);
-            // Border
-            d.draw_rectangle_lines(bx, by, bar_w, bar_h, Color::new(10, 10, 10, 255));
+        if self.screen_state == ScreenState::Playing {
+            for (screen_pos, hp_ratio) in vehicle_health_bars {
+                let bar_w = 46;
+                let bar_h = 6;
+                let bx = (screen_pos.x as i32) - bar_w / 2;
+                let by = (screen_pos.y as i32) - bar_h / 2;
+                
+                // Background
+                d.draw_rectangle(bx, by, bar_w, bar_h, Color::new(40, 40, 40, 180));
+                // Health color (Red for fire <=20%, Orange <=50%, Green fine)
+                let color = if hp_ratio <= 0.20 {
+                    Color::new(230, 40, 40, 255)
+                } else if hp_ratio <= 0.50 {
+                    Color::new(230, 130, 30, 255)
+                } else {
+                    Color::new(40, 200, 60, 255)
+                };
+                let hp_w = (hp_ratio * (bar_w - 2) as f32) as i32;
+                d.draw_rectangle(bx + 1, by + 1, hp_w.max(0).min(bar_w - 2), bar_h - 2, color);
+                // Border
+                d.draw_rectangle_lines(bx, by, bar_w, bar_h, Color::new(10, 10, 10, 255));
+            }
         }
 
         // Clock display (day/night cycle time).
-        let time_str = crate::config::format_game_time(self.time, self.cfg.time_scale);
-        let clock_w = d.measure_text(&time_str, 20);
-        d.draw_text(&time_str, d.get_screen_width() - clock_w - 16, 8, 20, Color::new(255, 255, 255, 200));
-        d.draw_text(&time_str, d.get_screen_width() - clock_w - 17, 7, 20, Color::new(0, 0, 0, 150));
+        if self.screen_state == ScreenState::Playing {
+            let time_str = crate::config::format_game_time(self.time, self.cfg.time_scale);
+            let clock_w = d.measure_text(&time_str, 20);
+            d.draw_text(&time_str, d.get_screen_width() - clock_w - 16, 8, 20, Color::new(255, 255, 255, 200));
+            d.draw_text(&time_str, d.get_screen_width() - clock_w - 17, 7, 20, Color::new(0, 0, 0, 150));
+        }
+
+        // Render Title/Intro overlays
+        if self.screen_state == ScreenState::Title {
+            self.render_title_screen(&mut d);
+        } else if self.screen_state == ScreenState::Intro {
+            self.render_intro_cutscene(&mut d);
+        }
 
         // Pause menu overlay.
         if self.paused {
             self.render_pause_menu(&mut d);
+        }
+    }
+
+    fn render_title_screen(&self, d: &mut RaylibDrawHandle) {
+        let sw = d.get_screen_width();
+        let sh = d.get_screen_height();
+
+        // Dark tint overlay for atmospheric feel and text contrast
+        d.draw_rectangle(0, 0, sw, sh, Color::new(10, 10, 18, 110));
+
+        // Glassmorphic panel for Logo
+        let panel_w = 600;
+        let panel_h = 320;
+        let panel_x = (sw - panel_w) / 2;
+        let panel_y = (sh - panel_h) / 2 - 40;
+
+        d.draw_rectangle(panel_x, panel_y, panel_w, panel_h, Color::new(20, 20, 35, 180));
+        d.draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, Color::new(0, 220, 255, 180));
+        d.draw_rectangle_lines(panel_x - 1, panel_y - 1, panel_w + 2, panel_h + 2, Color::new(0, 220, 255, 100));
+
+        let main_title = "GRAND THEFT";
+        let sub_title = "ALGORITHM VII";
+        let tagline = "SILICON VALLEY OF SIN";
+
+        let mt_size = 50;
+        let st_size = 55;
+        let mt_w = d.measure_text(main_title, mt_size);
+        let st_w = d.measure_text(sub_title, st_size);
+        let tag_w = d.measure_text(tagline, 24);
+
+        let start_y = panel_y + 40;
+
+        // Shadow glow
+        d.draw_text(main_title, panel_x + (panel_w - mt_w) / 2 + 3, start_y + 3, mt_size, Color::new(255, 0, 128, 120));
+        d.draw_text(main_title, panel_x + (panel_w - mt_w) / 2, start_y, mt_size, Color::WHITE);
+
+        d.draw_text(sub_title, panel_x + (panel_w - st_w) / 2 + 3, start_y + mt_size + 13, st_size, Color::new(0, 180, 255, 120));
+        d.draw_text(sub_title, panel_x + (panel_w - st_w) / 2, start_y + mt_size + 10, st_size, Color::new(255, 200, 0, 255));
+
+        let div_y = start_y + mt_size + st_size + 25;
+        d.draw_line(panel_x + 80, div_y, panel_x + panel_w - 80, div_y, Color::new(0, 220, 255, 150));
+
+        // Tagline (bold neon pink)
+        d.draw_text(tagline, panel_x + (panel_w - tag_w) / 2 + 2, div_y + 17, 24, Color::new(0, 0, 0, 150));
+        d.draw_text(tagline, panel_x + (panel_w - tag_w) / 2, div_y + 15, 24, Color::new(255, 60, 140, 255));
+
+        // Pulsing prompt
+        let start_prompt = "PRESS [SPACE] OR [ENTER] TO START";
+        let p_size = 20;
+        let p_w = d.measure_text(start_prompt, p_size);
+        let alpha_pulse = (((self.time * 4.0).sin() * 0.5 + 0.5) * 200.0 + 55.0) as u8;
+        let prompt_color = Color::new(255, 255, 255, alpha_pulse);
+        let prompt_y = panel_y + panel_h + 40;
+
+        d.draw_rectangle((sw - p_w - 60) / 2, prompt_y - 8, p_w + 60, p_size + 16, Color::new(10, 10, 25, 200));
+        d.draw_rectangle_lines((sw - p_w - 60) / 2, prompt_y - 8, p_w + 60, p_size + 16, Color::new(255, 60, 140, 100));
+        d.draw_text(start_prompt, (sw - p_w) / 2, prompt_y, p_size, prompt_color);
+
+        let quit_prompt = "PRESS [ESC] TO QUIT GAME";
+        let q_w = d.measure_text(quit_prompt, 16);
+        d.draw_text(quit_prompt, (sw - q_w) / 2, sh - 45, 16, Color::new(160, 160, 180, 255));
+    }
+
+    fn render_intro_cutscene(&self, d: &mut RaylibDrawHandle) {
+        let sw = d.get_screen_width();
+        let sh = d.get_screen_height();
+
+        // Cinematic bars
+        let bar_h = (sh as f32 * 0.12) as i32;
+        d.draw_rectangle(0, 0, sw, bar_h, Color::BLACK);
+        d.draw_rectangle(0, sh - bar_h, sw, bar_h, Color::BLACK);
+
+        d.draw_line(0, bar_h, sw, bar_h, Color::new(0, 200, 255, 100));
+        d.draw_line(0, sh - bar_h, sw, sh - bar_h, Color::new(0, 200, 255, 100));
+
+        if let Some(line) = INTRO_DIALOG.get(self.intro_dialog_idx) {
+            let box_w = (sw as f32 * 0.8) as i32;
+            let box_h = 100;
+            let box_x = (sw - box_w) / 2;
+            let box_y = sh - bar_h - box_h - 20;
+
+            d.draw_rectangle(box_x, box_y, box_w, box_h, Color::new(15, 15, 25, 230));
+            d.draw_rectangle_lines(box_x, box_y, box_w, box_h, Color::new(255, 60, 140, 180));
+            d.draw_rectangle_lines(box_x - 1, box_y - 1, box_w + 2, box_h + 2, Color::new(255, 60, 140, 100));
+
+            let name_size = 20;
+            d.draw_text(line.speaker, box_x + 25, box_y + 15, name_size, line.color);
+
+            let text_size = 18;
+            let text_color = Color::new(240, 240, 245, 255);
+
+            // Simple text wrapping
+            let words = line.text.split(' ');
+            let mut line1 = String::new();
+            let mut line2 = String::new();
+            let mut using_line2 = false;
+
+            for word in words {
+                if !using_line2 {
+                    if line1.len() + word.len() + 1 < 75 {
+                        if !line1.is_empty() { line1.push(' '); }
+                        line1.push_str(word);
+                    } else {
+                        using_line2 = true;
+                        line2.push_str(word);
+                    }
+                } else {
+                    if !line2.is_empty() { line2.push(' '); }
+                    line2.push_str(word);
+                }
+            }
+
+            d.draw_text(&line1, box_x + 25, box_y + 45, text_size, text_color);
+            if !line2.is_empty() {
+                d.draw_text(&line2, box_x + 25, box_y + 68, text_size, text_color);
+            }
+
+            let prompt = "[SPACE] CONTINUE  /  [S] SKIP INTRO";
+            let pr_w = d.measure_text(prompt, 14);
+            d.draw_text(prompt, box_x + box_w - pr_w - 20, box_y + box_h - 22, 14, Color::new(160, 160, 180, 255));
         }
     }
 
