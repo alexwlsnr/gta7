@@ -385,6 +385,8 @@ impl<'a> Game<'a> {
                 self.player.pos.y = 0.0;
                 self.player.vel = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
                 self.sfx.enter_exit.play();
+                let stars = self.wanted.stars;
+                self.sfx.update_audio_mode(false, stars);
             } else {
                 // Try to enter nearest vehicle within range.
                 let mut best: Option<(usize, f32)> = None;
@@ -398,14 +400,81 @@ impl<'a> Game<'a> {
                     }
                 }
                 if let Some((vi, _)) = best {
-                    self.player.in_vehicle = Some(vi);
-                    self.vehicles[vi].occupied = true;
-                    self.sfx.enter_exit.play();
-                    if self.vehicles[vi].kind == VehicleKind::Police {
-                        let needed_heat = 2.5 - self.wanted.heat;
+                    let mut had_driver = false;
+
+                    // 1. Check if it is a civilian traffic car
+                    let is_traffic = self.traffic.iter().any(|tc| tc.vehicle_idx == vi);
+                    if is_traffic {
+                        had_driver = true;
+                        let car = &self.vehicles[vi];
+                        let col = Color::new(
+                            100 + (rand::random::<u32>() % 120) as u8,
+                            100 + (rand::random::<u32>() % 120) as u8,
+                            100 + (rand::random::<u32>() % 120) as u8,
+                            255,
+                        );
+                        // Spawn a pedestrian driver getting thrown out
+                        let mut ped = Ped::new(car.pos, col);
+                        ped.state = crate::ai::ped::PedState::Dead;
+                        ped.dead_timer = 3.5;
+                        ped.health = 30.0; // injured
+
+                        // Throw out to the left of the vehicle (driver side)
+                        let fwd = dir_from_yaw(car.yaw);
+                        let left = Vector3 { x: fwd.z, y: 0.0, z: -fwd.x };
+                        ped.pos = vadd(car.pos, vscale(left, 1.2));
+                        ped.vel = vadd(vscale(left, 9.0), Vector3 { x: 0.0, y: 4.5, z: 0.0 });
+                        
+                        self.peds.push(ped);
+                        
+                        // Play impact/crash sound
+                        self.sfx.crash.play();
+                        
+                        // Remove from active traffic list so AI updates stop
+                        self.traffic.retain(|tc| tc.vehicle_idx != vi);
+                    }
+
+                    // 2. Check if police car with cops inside
+                    let mut thrown_cops = Vec::new();
+                    for cop in &mut self.cops {
+                        if cop.in_car == Some(vi) {
+                            had_driver = true;
+                            cop.in_car = None;
+                            cop.state = crate::ai::cop::CopState::Chase; // Aggro player
+                            
+                            // Throw cop out of the vehicle
+                            let car = &self.vehicles[vi];
+                            let fwd = dir_from_yaw(car.yaw);
+                            let left = Vector3 { x: fwd.z, y: 0.0, z: -fwd.x };
+                            cop.pos = vadd(car.pos, vscale(left, 1.2));
+                            cop.vel = vadd(vscale(left, 8.0), Vector3 { x: 0.0, y: 4.0, z: 0.0 });
+                            cop.health = 45.0; // injured
+                            
+                            thrown_cops.push(cop.pos);
+                        }
+                    }
+                    if !thrown_cops.is_empty() {
+                        self.sfx.crash.play();
+                        // Hijacking a cop car triggers wanted stars
+                        let needed_heat = 2.0 - self.wanted.heat;
                         if needed_heat > 0.0 {
                             self.wanted.add_heat(needed_heat);
                         }
+                    }
+
+                    self.vehicles[vi].is_traffic = false;
+                    self.vehicles[vi].occupied = true;
+
+                    // Enter.
+                    self.player.in_vehicle = Some(vi);
+                    self.sfx.enter_exit.play();
+                    
+                    let stars = self.wanted.stars;
+                    self.sfx.update_audio_mode(true, stars);
+
+                    if had_driver {
+                        self.wanted.add_heat(0.6);
+                        self.mission.show_banner("Hijacked! Vehicle stolen.");
                     }
                 }
             }
