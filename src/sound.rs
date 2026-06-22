@@ -2,6 +2,13 @@
 use std::f32::consts::TAU;
 use raylib::prelude::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoundMode {
+    Walk,
+    Drive,
+    Wanted,
+}
+
 pub struct SoundEffects<'a> {
     pub shoot: Sound<'a>,
     pub explosion: Sound<'a>,
@@ -9,10 +16,16 @@ pub struct SoundEffects<'a> {
     pub complete: Sound<'a>,
     pub enter_exit: Sound<'a>,
     pub engine: Sound<'a>,
-    pub radio: Vec<Music<'a>>,
-    pub radio_idx: usize,
     pub sfx_volume: f32,
     pub music_volume: f32,
+    
+    // Baked MP3 streams
+    pub radio: Vec<Music<'a>>,
+    pub walk_tracks: Vec<Music<'a>>,
+    pub wanted_tracks: Vec<Music<'a>>,
+    
+    pub current_mode: SoundMode,
+    pub active_track_idx: usize,
 }
 
 impl<'a> SoundEffects<'a> {
@@ -47,20 +60,61 @@ impl<'a> SoundEffects<'a> {
         let wave_enter_exit = audio.new_wave_from_memory(".wav", &enter_exit_wav).unwrap();
         let enter_exit = audio.new_sound_from_wave(&wave_enter_exit).unwrap();
 
-        // 6. Engine loop — continuous low rumble, pitch/volume modulated at runtime.
-        // Loaded as Sound (not Music) to avoid stream interference with radio tracks.
+        // 6. Engine loop
         let engine_samples = gen_engine();
         let engine_wav = make_wav_mono_16bit(22050, &engine_samples);
         let wave_engine = audio.new_wave_from_memory(".wav", &engine_wav).unwrap();
         let engine = audio.new_sound_from_wave(&wave_engine).unwrap();
 
-        // 7. Radio — Kevin MacLeod tracks (CC BY 4.0).
+        // 7. Radio (Kevin MacLeod MP3 files baked into the binary)
         let mut radio = Vec::new();
-        for path in &["assets/music/GoCart.mp3", "assets/music/LaserGroove.mp3"] {
-            if let Ok(mut m) = audio.new_music(path) {
+        
+        let radio_files = &[
+            include_bytes!("../assets/music/GoCart.mp3").as_slice(),
+            include_bytes!("../assets/music/LaserGroove.mp3").as_slice(),
+            include_bytes!("../assets/music/RetroFutureClean.mp3").as_slice(),
+            include_bytes!("../assets/music/RetroFutureDirty.mp3").as_slice(),
+            include_bytes!("../assets/music/FunkGameLoop.mp3").as_slice(),
+            include_bytes!("../assets/music/SpaceFighterLoop.mp3").as_slice(),
+            include_bytes!("../assets/music/Loopster.mp3").as_slice(),
+            include_bytes!("../assets/music/RocketPower.mp3").as_slice(),
+            include_bytes!("../assets/music/SonOfARocket.mp3").as_slice(),
+            include_bytes!("../assets/music/HappyHappyGameShow.mp3").as_slice(),
+        ];
+        
+        for bytes in radio_files {
+            if let Ok(mut m) = audio.new_music_from_memory(".mp3", bytes) {
                 m.set_looping(true);
                 m.set_volume(0.3);
                 radio.push(m);
+            }
+        }
+
+        // 8. Walk tracks (embedded)
+        let mut walk_tracks = Vec::new();
+        let walk_files = &[
+            include_bytes!("../assets/music/BassaIslandGameLoop.mp3").as_slice(),
+            include_bytes!("../assets/music/TownieLoop.mp3").as_slice(),
+        ];
+        for bytes in walk_files {
+            if let Ok(mut m) = audio.new_music_from_memory(".mp3", bytes) {
+                m.set_looping(true);
+                m.set_volume(0.3);
+                walk_tracks.push(m);
+            }
+        }
+
+        // 9. Wanted chase tracks (embedded)
+        let mut wanted_tracks = Vec::new();
+        let wanted_files = &[
+            include_bytes!("../assets/music/ZombieChase.mp3").as_slice(),
+            include_bytes!("../assets/music/ChasePulse.mp3").as_slice(),
+        ];
+        for bytes in wanted_files {
+            if let Ok(mut m) = audio.new_music_from_memory(".mp3", bytes) {
+                m.set_looping(true);
+                m.set_volume(0.3);
+                wanted_tracks.push(m);
             }
         }
 
@@ -71,70 +125,235 @@ impl<'a> SoundEffects<'a> {
             complete,
             enter_exit,
             engine,
-            radio,
-            radio_idx: 0,
             sfx_volume: 0.7,
             music_volume: 0.3,
+            
+            radio,
+            walk_tracks,
+            wanted_tracks,
+            current_mode: SoundMode::Walk,
+            active_track_idx: 0,
         }
     }
 
-    /// Update engine sound based on vehicle speed and throttle.
-    /// `speed` is signed forward speed (m/s). `throttle` is 0..1 (how much gas).
-    /// `in_vehicle` = true if player is driving.
     pub fn update_engine(&mut self, in_vehicle: bool, speed: f32, throttle: f32) {
         if in_vehicle {
-            // Loop: replay if the sound finished.
             if !self.engine.is_playing() {
                 self.engine.play();
             }
-            // Speed ratio: 0 (idle) to 1 (max speed ~40 m/s).
             let speed_ratio = (speed.abs() / 40.0).clamp(0.0, 1.0);
-            // Pitch: idle at 0.7, redline at 2.0.
             let pitch = 0.7 + speed_ratio * 1.3;
-            // Volume: idle hum at 0.15, full at 0.4. Throttle adds a bit. Scaled by sfx_volume.
             let volume = (0.15 + speed_ratio * 0.2 + throttle * 0.05).min(0.4) * self.sfx_volume;
             self.engine.set_pitch(pitch);
             self.engine.set_volume(volume);
         } else {
-            // Stop when not in vehicle.
             self.engine.stop();
         }
     }
 
-    /// Must be called every frame to keep the active radio stream fed.
     pub fn update_music(&mut self) {
-        if !self.radio.is_empty() {
-            self.radio[self.radio_idx].update_stream();
+        match self.current_mode {
+            SoundMode::Walk => {
+                if !self.walk_tracks.is_empty() {
+                    let idx = self.active_track_idx % self.walk_tracks.len();
+                    self.walk_tracks[idx].update_stream();
+                }
+            }
+            SoundMode::Drive => {
+                if !self.radio.is_empty() {
+                    let idx = self.active_track_idx % self.radio.len();
+                    self.radio[idx].update_stream();
+                }
+            }
+            SoundMode::Wanted => {
+                if !self.wanted_tracks.is_empty() {
+                    let idx = self.active_track_idx % self.wanted_tracks.len();
+                    self.wanted_tracks[idx].update_stream();
+                }
+            }
         }
     }
-    /// Start playing the radio if not already playing.
+
     pub fn start_radio(&mut self) {
-        if self.radio.is_empty() {
-            return;
-        }
-        let m = &self.radio[self.radio_idx];
-        if !m.is_stream_playing() {
-            m.play_stream();
-        }
+        self.update_audio_mode(false, 0);
     }
 
-    /// Update radio volume and cycle tracks when one finishes.
     pub fn update_radio(&mut self) {
-        if self.radio.is_empty() {
-            return;
+        match self.current_mode {
+            SoundMode::Walk => {
+                if !self.walk_tracks.is_empty() {
+                    let idx = self.active_track_idx % self.walk_tracks.len();
+                    let m = &mut self.walk_tracks[idx];
+                    if !m.is_stream_playing() {
+                        m.play_stream();
+                    }
+                    m.set_volume(self.music_volume);
+                }
+            }
+            SoundMode::Drive => {
+                if !self.radio.is_empty() {
+                    let idx = self.active_track_idx % self.radio.len();
+                    let m = &mut self.radio[idx];
+                    if !m.is_stream_playing() {
+                        m.play_stream();
+                    }
+                    m.set_volume(self.music_volume);
+                }
+            }
+            SoundMode::Wanted => {
+                if !self.wanted_tracks.is_empty() {
+                    let idx = self.active_track_idx % self.wanted_tracks.len();
+                    let m = &mut self.wanted_tracks[idx];
+                    if !m.is_stream_playing() {
+                        m.play_stream();
+                    }
+                    m.set_volume(self.music_volume * 1.2);
+                }
+            }
         }
-        let len = self.radio.len();
-        let m = &self.radio[self.radio_idx];
-        if !m.is_stream_playing() {
-            // Track finished — cycle to next.
-            self.radio_idx = (self.radio_idx + 1) % len;
-            self.radio[self.radio_idx].play_stream();
-        }
-        // Apply current music volume.
-        self.radio[self.radio_idx].set_volume(self.music_volume);
     }
 
-    /// Set SFX volume (applies to all one-shot sounds).
+    pub fn update_audio_mode(&mut self, in_vehicle: bool, wanted_stars: u8) {
+        let target_mode = if wanted_stars > 0 {
+            SoundMode::Wanted
+        } else if in_vehicle {
+            SoundMode::Drive
+        } else {
+            SoundMode::Walk
+        };
+
+        if target_mode != self.current_mode {
+            self.stop_all_music();
+            self.current_mode = target_mode;
+            let count = match target_mode {
+                SoundMode::Walk => self.walk_tracks.len(),
+                SoundMode::Drive => self.radio.len(),
+                SoundMode::Wanted => self.wanted_tracks.len(),
+            };
+            if count > 0 {
+                self.active_track_idx = rand::random::<usize>() % count;
+            } else {
+                self.active_track_idx = 0;
+            }
+            self.start_current_track();
+        }
+    }
+
+    pub fn stop_all_music(&mut self) {
+        for m in &mut self.radio {
+            if m.is_stream_playing() {
+                m.stop_stream();
+            }
+        }
+        for m in &mut self.walk_tracks {
+            if m.is_stream_playing() {
+                m.stop_stream();
+            }
+        }
+        for m in &mut self.wanted_tracks {
+            if m.is_stream_playing() {
+                m.stop_stream();
+            }
+        }
+    }
+
+    pub fn start_current_track(&mut self) {
+        match self.current_mode {
+            SoundMode::Walk => {
+                if !self.walk_tracks.is_empty() {
+                    let idx = self.active_track_idx % self.walk_tracks.len();
+                    self.walk_tracks[idx].set_volume(self.music_volume);
+                    self.walk_tracks[idx].play_stream();
+                }
+            }
+            SoundMode::Drive => {
+                if !self.radio.is_empty() {
+                    let idx = self.active_track_idx % self.radio.len();
+                    self.radio[idx].set_volume(self.music_volume);
+                    self.radio[idx].play_stream();
+                }
+            }
+            SoundMode::Wanted => {
+                if !self.wanted_tracks.is_empty() {
+                    let idx = self.active_track_idx % self.wanted_tracks.len();
+                    self.wanted_tracks[idx].set_volume(self.music_volume * 1.25);
+                    self.wanted_tracks[idx].play_stream();
+                }
+            }
+        }
+    }
+
+    pub fn cycle_track(&mut self, forward: bool) {
+        self.stop_all_music();
+        match self.current_mode {
+            SoundMode::Walk => {
+                let len = self.walk_tracks.len();
+                if len > 0 {
+                    if forward {
+                        self.active_track_idx = (self.active_track_idx + 1) % len;
+                    } else {
+                        self.active_track_idx = (self.active_track_idx + len - 1) % len;
+                    }
+                }
+            }
+            SoundMode::Drive => {
+                let len = self.radio.len();
+                if len > 0 {
+                    if forward {
+                        self.active_track_idx = (self.active_track_idx + 1) % len;
+                    } else {
+                        self.active_track_idx = (self.active_track_idx + len - 1) % len;
+                    }
+                }
+            }
+            SoundMode::Wanted => {
+                let len = self.wanted_tracks.len();
+                if len > 0 {
+                    if forward {
+                        self.active_track_idx = (self.active_track_idx + 1) % len;
+                    } else {
+                        self.active_track_idx = (self.active_track_idx + len - 1) % len;
+                    }
+                }
+            }
+        }
+        self.start_current_track();
+    }
+
+    pub fn current_track_title(&self) -> &str {
+        match self.current_mode {
+            SoundMode::Walk => {
+                if self.walk_tracks.is_empty() { return "No Track"; }
+                match self.active_track_idx % self.walk_tracks.len() {
+                    0 => "Bassa Island Game Loop",
+                    _ => "Townie Loop",
+                }
+            }
+            SoundMode::Drive => {
+                if self.radio.is_empty() { return "No Track"; }
+                match self.active_track_idx % self.radio.len() {
+                    0 => "Go Cart (Loop Mix)",
+                    1 => "Laser Groove",
+                    2 => "RetroFuture Clean",
+                    3 => "RetroFuture Dirty",
+                    4 => "Funk Game Loop",
+                    5 => "Space Fighter Loop",
+                    6 => "Loopster",
+                    7 => "Rocket Power",
+                    8 => "Son Of A Rocket",
+                    _ => "Happy Happy Game Show",
+                }
+            }
+            SoundMode::Wanted => {
+                if self.wanted_tracks.is_empty() { return "No Track"; }
+                match self.active_track_idx % self.wanted_tracks.len() {
+                    0 => "Zombie Chase",
+                    _ => "Chase Pulse",
+                }
+            }
+        }
+    }
+
     pub fn set_sfx_volume(&mut self, vol: f32) {
         self.sfx_volume = vol;
         self.shoot.set_volume(vol);
@@ -144,7 +363,6 @@ impl<'a> SoundEffects<'a> {
         self.enter_exit.set_volume(vol);
     }
 
-    /// Set music/radio volume.
     pub fn set_music_volume(&mut self, vol: f32) {
         self.music_volume = vol;
     }
@@ -152,34 +370,25 @@ impl<'a> SoundEffects<'a> {
 
 fn make_wav_mono_16bit(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
     let mut wav = Vec::with_capacity(44 + samples.len() * 2);
-    
-    // RIFF header
     wav.extend_from_slice(b"RIFF");
     let file_size = 36 + (samples.len() * 2) as u32;
     wav.extend_from_slice(&file_size.to_le_bytes());
     wav.extend_from_slice(b"WAVE");
-    
-    // fmt chunk
     wav.extend_from_slice(b"fmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes()); // Chunk size
-    wav.extend_from_slice(&1u16.to_le_bytes());  // PCM format
-    wav.extend_from_slice(&1u16.to_le_bytes());  // Mono (1 channel)
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
     wav.extend_from_slice(&sample_rate.to_le_bytes());
     let byte_rate = sample_rate * 2;
     wav.extend_from_slice(&byte_rate.to_le_bytes());
-    wav.extend_from_slice(&2u16.to_le_bytes());  // Block align
-    wav.extend_from_slice(&16u16.to_le_bytes()); // Bits per sample
-    
-    // data chunk
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
     wav.extend_from_slice(b"data");
     let data_size = (samples.len() * 2) as u32;
     wav.extend_from_slice(&data_size.to_le_bytes());
-    
-    // PCM samples
     for &s in samples {
         wav.extend_from_slice(&s.to_le_bytes());
     }
-    
     wav
 }
 
@@ -190,11 +399,10 @@ fn gen_shoot() -> Vec<i16> {
     let num_samples = (sample_rate * duration) as usize;
     for i in 0..num_samples {
         let t = i as f32 / sample_rate;
-        // Slide frequency down quickly (classic pew-pew).
         let freq = 900.0 - (t / duration) * 700.0;
         let phase = t * freq * TAU;
         let val = phase.sin();
-        let env = 1.0 - t / duration; // linear decay
+        let env = 1.0 - t / duration;
         let s = (val * env * 18000.0) as i16;
         samples.push(s);
     }
@@ -208,9 +416,7 @@ fn gen_explosion() -> Vec<i16> {
     let num_samples = (sample_rate * duration) as usize;
     for i in 0..num_samples {
         let t = i as f32 / sample_rate;
-        // White noise.
         let noise = (rand::random::<f32>() - 0.5) * 2.0;
-        // Exponential decay envelope for explosion rumble.
         let env = (-t * 6.0).exp();
         let s = (noise * env * 15000.0) as i16;
         samples.push(s);
@@ -225,7 +431,6 @@ fn gen_crash() -> Vec<i16> {
     let num_samples = (sample_rate * duration) as usize;
     for i in 0..num_samples {
         let t = i as f32 / sample_rate;
-        // Low frequency thud + white noise mix.
         let noise = (rand::random::<f32>() - 0.5) * 1.5;
         let phase = t * 90.0 * TAU;
         let val = phase.sin() * 0.4 + noise * 0.6;
@@ -239,13 +444,12 @@ fn gen_crash() -> Vec<i16> {
 fn gen_complete() -> Vec<i16> {
     let mut samples = Vec::new();
     let sample_rate = 22050.0;
-    // Succession of two chime notes: A4 (440Hz) then E5 (659.25Hz).
     let num_samples = (sample_rate * 0.8) as usize;
     for i in 0..num_samples {
         let t = i as f32 / sample_rate;
         let freq = if t < 0.2 { 440.0 } else { 659.25 };
         let phase = t * freq * TAU;
-        let val = phase.sin() * 0.5 + (phase * 2.0).sin() * 0.25; // Rich harmonics
+        let val = phase.sin() * 0.5 + (phase * 2.0).sin() * 0.25;
         let env = if t < 0.2 {
             1.0 - t / 0.2
         } else {
@@ -274,32 +478,24 @@ fn gen_beep() -> Vec<i16> {
     samples
 }
 
-/// Generate a 1-second looping engine rumble.
-/// Low-frequency sawtooth base + harmonics + slight noise for texture.
-/// Pitch and volume are modulated at runtime via Music::set_pitch/set_volume.
 fn gen_engine() -> Vec<i16> {
     let mut samples = Vec::new();
     let duration = 1.0;
     let sample_rate = 22050.0;
     let num_samples = (sample_rate * duration) as usize;
-    // Base idle frequency — low rumble.
     let base_freq = 80.0;
     for i in 0..num_samples {
         let t = i as f32 / sample_rate;
-        // Sawtooth: rich harmonics for engine character.
         let phase = (t * base_freq) % 1.0;
         let saw = 2.0 * phase - 1.0;
-        // Second harmonic for a deeper growl.
         let h2 = ((t * base_freq * 2.0) % 1.0 * 2.0 - 1.0) * 0.3;
-        // Sub-bass sine for body.
         let sub = (t * base_freq * 0.5 * TAU).sin() * 0.2;
-        // Slight noise for mechanical texture.
         let noise = (rand::random::<f32>() - 0.5) * 0.15;
         let val = saw * 0.5 + h2 + sub + noise;
-        // Gentle amplitude wobble for realism.
         let wobble = 0.9 + 0.1 * (t * 8.0 * TAU).sin();
         let s = (val * wobble * 8000.0) as i16;
         samples.push(s);
     }
     samples
 }
+

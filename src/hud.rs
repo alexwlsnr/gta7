@@ -23,6 +23,8 @@ pub fn draw_hud(
     rate_label: &str,
     debug: bool,
     fps: i32,
+    sfx: &crate::sound::SoundEffects,
+    time: f32,
 ) {
     let sw = d.get_screen_width();
     let sh = d.get_screen_height();
@@ -198,6 +200,54 @@ pub fn draw_hud(
         for (i, line) in lines.iter().enumerate() {
             d.draw_text(line, 20, 20 + (i * 18) as i32, 16, Color::new(255, 255, 0, 220));
         }
+    }
+
+    // --- Music Player Widget (above status bars on the bottom-left) ---
+    let music_y = if player.in_vehicle.is_some() { bar_y - 72 } else { bar_y - 48 };
+    let music_w = 200;
+    let music_h = 42;
+    
+    // Draw background panel
+    d.draw_rectangle(bar_x, music_y, music_w, music_h, Color::new(15, 15, 25, 200));
+    let music_border = match sfx.current_mode {
+        crate::sound::SoundMode::Wanted => Color::new(220, 40, 40, 180),
+        crate::sound::SoundMode::Drive => Color::new(0, 180, 220, 180),
+        crate::sound::SoundMode::Walk => Color::new(60, 180, 80, 180),
+    };
+    d.draw_rectangle_lines(bar_x, music_y, music_w, music_h, music_border);
+    
+    // Track title
+    let title = sfx.current_track_title();
+    d.draw_text(title, bar_x + 8, music_y + 6, 13, Color::WHITE);
+    
+    // Controls nudge
+    d.draw_text("[ / ] Change track", bar_x + 8, music_y + 24, 11, Color::new(160, 160, 180, 200));
+    
+    // Visualizer (6 bars)
+    let vis_x = bar_x + music_w - 55;
+    let vis_y = music_y + 8;
+    for i in 0..6 {
+        let speed_multiplier = match sfx.current_mode {
+            crate::sound::SoundMode::Wanted => 2.5,
+            crate::sound::SoundMode::Drive => 1.8,
+            crate::sound::SoundMode::Walk => 1.0,
+        };
+        // Add a bit of pseudo-noise/phase shift per bar
+        let phase = i as f32 * 1.2 + (i as f32 * 2.3).cos() * 0.5;
+        let wave = (time * 7.0 * speed_multiplier + phase).sin().abs();
+        let bar_h = 3 + (wave * 18.0) as i32;
+        let bar_color = match sfx.current_mode {
+            crate::sound::SoundMode::Wanted => Color::new(220, 40, 40, 230),
+            crate::sound::SoundMode::Drive => Color::new(0, 220, 255, 230),
+            crate::sound::SoundMode::Walk => Color::new(60, 220, 80, 230),
+        };
+        d.draw_rectangle(
+            vis_x + i * 8,
+            vis_y + (22 - bar_h),
+            5,
+            bar_h,
+            bar_color,
+        );
     }
 
     // --- Controls hint (bottom-center, first few seconds) ---

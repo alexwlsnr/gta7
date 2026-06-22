@@ -391,6 +391,12 @@ impl<'a> Game<'a> {
                     self.player.in_vehicle = Some(vi);
                     self.vehicles[vi].occupied = true;
                     self.sfx.enter_exit.play();
+                    if self.vehicles[vi].kind == VehicleKind::Police {
+                        let needed_heat = 2.5 - self.wanted.heat;
+                        if needed_heat > 0.0 {
+                            self.wanted.add_heat(needed_heat);
+                        }
+                    }
                 }
             }
         }
@@ -923,7 +929,7 @@ impl<'a> Game<'a> {
                         ped.vel = vscale(normal, v_speed * 0.9 + 2.0); // Throw ped!
                         self.fx.blood(ped.pos);
                         hit_sound = true;
-                        if v.occupied { self.wanted.add_heat(0.3); } // player's car — crime gets heat
+                        if v.occupied { self.wanted.add_heat(0.8); } // player's car — crime gets heat
                     }
                 }
             }
@@ -1068,6 +1074,7 @@ impl<'a> Game<'a> {
                 cop.pos.z += push_dir.z * (1.2 - d);
             }
         }
+        self.sfx.update_audio_mode(self.player.in_vehicle.is_some(), self.wanted.stars);
         self.player.snapshot();
         for v in self.vehicles.iter_mut() {
             v.snapshot();
@@ -1472,6 +1479,8 @@ impl<'a> Game<'a> {
                 rate_label,
                 debug,
                 fps,
+                &self.sfx,
+                self.time,
             );
         }
 
@@ -1847,6 +1856,12 @@ impl<'a> Game<'a> {
         }
         if rl.is_key_pressed(KeyboardKey::KEY_F2) {
             self.cfg.logic_rate = self.cfg.logic_rate.next();
+        }
+        if rl.is_key_pressed(KeyboardKey::KEY_LEFT_BRACKET) {
+            self.sfx.cycle_track(false);
+        }
+        if rl.is_key_pressed(KeyboardKey::KEY_RIGHT_BRACKET) {
+            self.sfx.cycle_track(true);
         }
     }
 }
