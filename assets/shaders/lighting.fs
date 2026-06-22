@@ -32,21 +32,12 @@ float compute_shadow() {
 }
 
 void main() {
-    // Base color from texture and diffuse color.
     vec4 texColor = texture(texture0, fragTexCoord);
     vec3 baseColor = texColor.rgb * fragColor.rgb;
 
-    // Normalize, with fallback for degenerate normals.
-    vec3 normal = fragNormal;
-    float nlen = length(normal);
-    if (nlen > 0.001) {
-        normal = normal / nlen;
-    } else {
-        normal = vec3(0.0, 1.0, 0.0);
-    }
+    vec3 normal = normalize(fragNormal);
     vec3 lightDir = normalize(-u_lightDir);
 
-    // Half-Lambert wrap lighting for soft shadows on all faces.
     float diff = max(dot(normal, lightDir), 0.0);
     float wrap = max(dot(normal, lightDir) * 0.5 + 0.5, 0.0);
     wrap = wrap * wrap;
@@ -58,7 +49,6 @@ void main() {
     vec3 fill = u_ambientColor * baseColor * wrap * 0.3;
     vec3 lit = ambient + diffuse + fill;
 
-    // Exponential fog.
     float dist = length(u_cameraPos - fragWorldPos);
     float fogFactor = 1.0 - exp(-u_fogDensity * dist);
     fogFactor = clamp(fogFactor, 0.0, 1.0);
