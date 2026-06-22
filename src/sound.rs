@@ -8,7 +8,7 @@ pub struct SoundEffects<'a> {
     pub crash: Sound<'a>,
     pub complete: Sound<'a>,
     pub enter_exit: Sound<'a>,
-    pub engine: Music<'a>,
+    pub engine: Sound<'a>,
     pub radio: Vec<Music<'a>>,
     pub radio_idx: usize,
     pub sfx_volume: f32,
@@ -48,11 +48,11 @@ impl<'a> SoundEffects<'a> {
         let enter_exit = audio.new_sound_from_wave(&wave_enter_exit).unwrap();
 
         // 6. Engine loop — continuous low rumble, pitch/volume modulated at runtime.
+        // Loaded as Sound (not Music) to avoid stream interference with radio tracks.
         let engine_samples = gen_engine();
         let engine_wav = make_wav_mono_16bit(22050, &engine_samples);
-        let mut engine = audio.new_music_from_memory(".wav", &engine_wav).unwrap();
-        engine.set_looping(true);
-        engine.set_volume(0.0); // silent until player enters a vehicle
+        let wave_engine = audio.new_wave_from_memory(".wav", &engine_wav).unwrap();
+        let engine = audio.new_sound_from_wave(&wave_engine).unwrap();
 
         // 7. Radio — Kevin MacLeod tracks (CC BY 4.0).
         let mut radio = Vec::new();
@@ -83,33 +83,30 @@ impl<'a> SoundEffects<'a> {
     /// `in_vehicle` = true if player is driving.
     pub fn update_engine(&mut self, in_vehicle: bool, speed: f32, throttle: f32) {
         if in_vehicle {
-            if !self.engine.is_stream_playing() {
-                self.engine.play_stream();
+            // Loop: replay if the sound finished.
+            if !self.engine.is_playing() {
+                self.engine.play();
             }
             // Speed ratio: 0 (idle) to 1 (max speed ~40 m/s).
             let speed_ratio = (speed.abs() / 40.0).clamp(0.0, 1.0);
             // Pitch: idle at 0.7, redline at 2.0.
             let pitch = 0.7 + speed_ratio * 1.3;
-            // Volume: idle hum at 0.15, full at 0.4. Throttle adds a bit.
-            let volume = 0.15 + speed_ratio * 0.2 + throttle * 0.05;
+            // Volume: idle hum at 0.15, full at 0.4. Throttle adds a bit. Scaled by sfx_volume.
+            let volume = (0.15 + speed_ratio * 0.2 + throttle * 0.05).min(0.4) * self.sfx_volume;
             self.engine.set_pitch(pitch);
-            self.engine.set_volume(volume.min(0.4));
+            self.engine.set_volume(volume);
         } else {
-            // Fade out and stop when not in vehicle.
-            if self.engine.is_stream_playing() {
-                self.engine.stop_stream();
-            }
+            // Stop when not in vehicle.
+            self.engine.stop();
         }
     }
 
-    /// Must be called every frame to keep all music streams fed.
+    /// Must be called every frame to keep the active radio stream fed.
     pub fn update_music(&mut self) {
-        self.engine.update_stream();
-        for m in &self.radio {
-            m.update_stream();
+        if !self.radio.is_empty() {
+            self.radio[self.radio_idx].update_stream();
         }
     }
-
     /// Start playing the radio if not already playing.
     pub fn start_radio(&mut self) {
         if self.radio.is_empty() {
