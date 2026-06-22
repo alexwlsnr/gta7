@@ -1093,7 +1093,7 @@ impl<'a> Game<'a> {
         {
             let mut d3 = d.begin_mode3D(cam);
             // World.
-            draw_world(&mut d3, &self.city, &self.assets, &self.cfg, total_hours);
+            draw_world(&mut d3, &self.city, &self.assets, &self.cfg, total_hours, cam_pos);
 
             // Pickups.
             for p in &self.pickups {

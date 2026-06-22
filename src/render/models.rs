@@ -170,7 +170,7 @@ impl Assets {
 }
 
 /// Draw the ground plane + roads + sidewalks + parks + streetlights.
-pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg: &Config, hour: f32) {
+pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg: &Config, hour: f32, cam_pos: Vector3) {
     let half = city.ground_half;
     let p = cfg.palette();
 
@@ -342,44 +342,61 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         draw_building(d3, b, assets, &p);
     }
 
-    // Streetlights at intersection corners
+    // Streetlights at intersection corners (culled by camera distance to optimize draw calls)
     let is_night = !(6.5..=18.5).contains(&hour);
     let bulb_color = if is_night { Color::new(255, 255, 180, 255) } else { Color::new(180, 180, 180, 255) };
     let sw_offset = rw * 0.5 + sw * 0.5;
 
     for i in 0..=n {
         let cx = origin + i as f32 * bs;
+        if (cx - cam_pos.x).abs() > 80.0 {
+            continue;
+        }
         for j in 0..=n {
             let cz = origin + j as f32 * bs;
+            if (cz - cam_pos.z).abs() > 80.0 {
+                continue;
+            }
+            
+            // Render 2 diagonal corner streetlights per intersection (optimized density)
             let offsets = [
                 (-sw_offset, -sw_offset),
-                (sw_offset, -sw_offset),
-                (-sw_offset, sw_offset),
                 (sw_offset, sw_offset),
             ];
             for (ox, oz) in offsets {
                 let sx = cx + ox;
                 let sz = cz + oz;
-                // Draw pole
-                d3.draw_cylinder_ex(
-                    Vector3 { x: sx, y: 0.0, z: sz },
-                    Vector3 { x: sx, y: 4.0, z: sz },
-                    0.07, 0.07, 5,
+                // Draw pole (using GPU-loaded plain_cube_model instead of CPU-mesh-generated cylinders)
+                d3.draw_model_ex(
+                    &assets.plain_cube_model,
+                    Vector3 { x: sx, y: 2.0, z: sz },
+                    Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.0,
+                    Vector3 { x: 0.12, y: 4.0, z: 0.12 },
                     Color::new(55, 55, 60, 255),
                 );
                 // Arm pointing diagonally inwards to the intersection center
                 let dir_x = -ox.signum() * 0.8;
                 let dir_z = -oz.signum() * 0.8;
-                d3.draw_cube(
+                d3.draw_model_ex(
+                    &assets.plain_cube_model,
                     Vector3 { x: sx + dir_x * 0.5, y: 4.0, z: sz + dir_z * 0.5 },
-                    if dir_x.abs() > 0.01 { 1.0 } else { 0.15 },
-                    0.07,
-                    if dir_z.abs() > 0.01 { 1.0 } else { 0.15 },
+                    Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.0,
+                    Vector3 {
+                        x: if dir_x.abs() > 0.01 { 1.0 } else { 0.15 },
+                        y: 0.07,
+                        z: if dir_z.abs() > 0.01 { 1.0 } else { 0.15 },
+                    },
                     Color::new(65, 65, 70, 255),
                 );
-                // Warm bulb
+                // Warm bulb (using plain_cube_model)
                 let bulb_pos = Vector3 { x: sx + dir_x, y: 3.85, z: sz + dir_z };
-                d3.draw_sphere(bulb_pos, 0.18, bulb_color);
+                d3.draw_model_ex(
+                    &assets.plain_cube_model,
+                    bulb_pos,
+                    Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.0,
+                    Vector3 { x: 0.3, y: 0.3, z: 0.3 },
+                    bulb_color,
+                );
             }
         }
     }
