@@ -4,20 +4,26 @@ in vec3 vertexPosition;
 in vec2 vertexTexCoord;
 in vec3 vertexNormal;
 
+// These uniforms are automatically set by raylib when a shader is active.
 uniform mat4 mvp;
-uniform mat4 model;
+uniform mat4 modelMatrix;
+uniform vec4 colDiffuse;
+
+// Custom uniforms set manually from Rust.
 uniform mat4 lightSpaceMatrix;
 
 out vec3 fragWorldPos;
 out vec2 fragTexCoord;
 out vec3 fragNormal;
 out vec4 fragLightSpacePos;
+out vec4 fragColor;
 
 void main() {
-    vec4 worldPos = model * vec4(vertexPosition, 1.0);
+    vec4 worldPos = modelMatrix * vec4(vertexPosition, 1.0);
     fragWorldPos = worldPos.xyz;
     fragTexCoord = vertexTexCoord;
-    fragNormal = mat3(model) * vertexNormal;
+    fragNormal = mat3(modelMatrix) * vertexNormal;
     fragLightSpacePos = lightSpaceMatrix * worldPos;
+    fragColor = colDiffuse;
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 }

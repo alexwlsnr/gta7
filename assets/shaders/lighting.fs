@@ -4,7 +4,9 @@ in vec3 fragWorldPos;
 in vec2 fragTexCoord;
 in vec3 fragNormal;
 in vec4 fragLightSpacePos;
+in vec4 fragColor;
 
+// Custom uniforms set manually from Rust.
 uniform vec3 u_lightDir;
 uniform vec3 u_lightColor;
 uniform vec3 u_ambientColor;
@@ -12,8 +14,9 @@ uniform vec3 u_fogColor;
 uniform float u_fogDensity;
 uniform vec3 u_cameraPos;
 uniform sampler2D u_shadowMap;
+
+// texture0 is automatically bound by raylib.
 uniform sampler2D texture0;
-uniform vec4 u_colDiffuse;
 
 out vec4 finalColor;
 
@@ -35,9 +38,10 @@ float compute_shadow() {
 }
 
 void main() {
-    // Sample texture.
+    // Sample texture (raylib binds texture0 automatically).
     vec4 texColor = texture(texture0, fragTexCoord);
-    vec3 baseColor = texColor.rgb * u_colDiffuse.rgb;
+    // Use the vertex shader's colDiffuse as the base color.
+    vec3 baseColor = texColor.rgb * fragColor.rgb;
 
     // Normalize vectors.
     vec3 normal = normalize(fragNormal);
@@ -64,5 +68,5 @@ void main() {
     fogFactor = clamp(fogFactor, 0.0, 1.0);
 
     vec3 final = mix(lit, u_fogColor, fogFactor);
-    finalColor = vec4(final, u_colDiffuse.a);
+    finalColor = vec4(final, fragColor.a);
 }
