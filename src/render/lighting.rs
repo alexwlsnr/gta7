@@ -95,6 +95,8 @@ impl LightingSystem {
         assets.building_model.materials_mut()[0].set_shader(&self.lit_shader);
         assets.ground_model.materials_mut()[0].set_shader(&self.lit_shader);
         assets.plain_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.carbon_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.grill_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
     }
 
     /// Compute the light space matrix (view + projection) for shadow mapping.

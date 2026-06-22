@@ -16,11 +16,15 @@ use crate::mathx::{vadd, vsub, vscale};
 pub struct Assets {
     pub building_model: Model,   // unit cube with window texture
     pub plain_cube_model: Model, // unit cube, lit via shader with a 1x1 white albedo texture
+    pub carbon_cube_model: Model, // unit cube with carbon fiber texture
+    pub grill_cube_model: Model,  // unit cube with grille texture
     pub window_tex: Texture2D,
     pub white_tex: Texture2D,
     pub ground_model: Model,     // large plane with ground texture
     pub ground_tex: Texture2D,
     pub road_tex: Texture2D,     // for HUD minimap
+    pub carbon_tex: Texture2D,
+    pub grill_tex: Texture2D,
     pub sky_top: Color,
     pub sky_bottom: Color,
 }
@@ -87,6 +91,38 @@ impl Assets {
             .materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &ground_tex);
 
+        // --- Carbon Fiber Texture (Alternating dark grey / black blocks) ---
+        let mut carbon = Image::gen_image_color(16, 16, Color::new(35, 35, 35, 255));
+        for y in 0..16 {
+            for x in 0..16 {
+                // A diagonal herringbone weave pattern
+                let is_dark = (x / 2 + y / 2) % 2 == 0;
+                let val = if is_dark { 18 } else { 32 };
+                // Add minor texture variation
+                let noise = ((x % 2) * 4) as i32 - 2;
+                let c = (val + noise).clamp(0, 255) as u8;
+                carbon.draw_pixel(x, y, Color::new(c, c, c, 255));
+            }
+        }
+        let carbon_tex = rl.load_texture_from_image(thread, &carbon).unwrap();
+
+        // --- Radiator Grille Texture (Horizontal slats with vertical dividers) ---
+        let mut grill = Image::gen_image_color(16, 16, Color::new(15, 15, 15, 255));
+        for y in 0..16 {
+            for x in 0..16 {
+                let is_slat = (y % 4 == 0) || (y % 4 == 1);
+                let is_mesh_vertical = x % 4 == 0;
+                if is_slat || is_mesh_vertical {
+                    // Mesh bar (light grey)
+                    grill.draw_pixel(x, y, Color::new(55, 55, 60, 255));
+                } else {
+                    // Empty space (darker)
+                    grill.draw_pixel(x, y, Color::new(10, 10, 12, 255));
+                }
+            }
+        }
+        let grill_tex = rl.load_texture_from_image(thread, &grill).unwrap();
+
         // --- Plain cube model (for car bodies, character parts) ---
         // Give it a 1x1 white albedo texture so the lighting shader's texture0
         // sample multiplies by white instead of black. Tint comes from colDiffuse.
@@ -98,14 +134,35 @@ impl Assets {
         plain_cube_model
             .materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &white_tex);
+
+        // --- Carbon cube model ---
+        let cc_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let cc_weak = unsafe { cc_mesh.make_weak() };
+        let mut carbon_cube_model = rl.load_model_from_mesh(thread, cc_weak).unwrap();
+        carbon_cube_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &carbon_tex);
+
+        // --- Grill cube model ---
+        let gc_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let gc_weak = unsafe { gc_mesh.make_weak() };
+        let mut grill_cube_model = rl.load_model_from_mesh(thread, gc_weak).unwrap();
+        grill_cube_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &grill_tex);
+
         Assets {
             building_model,
             plain_cube_model,
+            carbon_cube_model,
+            grill_cube_model,
             window_tex,
             white_tex,
             ground_model,
             ground_tex,
             road_tex,
+            carbon_tex,
+            grill_tex,
             sky_top: p.sky_top(),
             sky_bottom: p.sky_bottom(),
         }
@@ -418,6 +475,16 @@ pub fn draw_car(
         Color::new(20, 20, 20, 255),
     );
 
+    // 1.5 Draw Front Radiator Grille
+    let grille_local = Vector3 { x: 0.0, y: -body_h * 0.1, z: body_l * 0.5 + 0.015 };
+    d3.draw_model_ex(
+        &assets.grill_cube_model,
+        vadd(pos, rotate_vector(grille_local, q)),
+        axis, angle_deg,
+        Vector3 { x: body_w * 0.6, y: body_h * 0.4, z: 0.02 },
+        Color::WHITE,
+    );
+
     // 2. Draw Cabin (if not Pickup bed area)
     let cabin_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z };
     let cabin_world = vadd(pos, rotate_vector(cabin_local, q));
@@ -490,14 +557,14 @@ pub fn draw_car(
                 Vector3 { x: 0.08, y: 0.3, z: 0.08 },
                 body_color,
             );
-            // Spoiler wing bar
+            // Spoiler wing bar (textured with carbon fiber)
             let wing_local = Vector3 { x: 0.0, y: body_h * 0.5 + 0.3, z: spoiler_z };
             d3.draw_model_ex(
-                &assets.plain_cube_model,
+                &assets.carbon_cube_model,
                 vadd(pos, rotate_vector(wing_local, q)),
                 axis, angle_deg,
                 Vector3 { x: body_w * 1.05, y: 0.06, z: 0.35 },
-                Color::new(30, 30, 30, 255), // Carbon spoiler look
+                Color::WHITE, // Multiply by white to render the texture as-is
             );
             // Double exhaust pipes at back
             let ex_z = -body_l * 0.5;
