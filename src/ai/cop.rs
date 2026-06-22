@@ -45,23 +45,37 @@ impl Cop {
 
     /// `player_pos` = where the player is. `can_shoot` = wanted >= 2.
     /// Returns true if the cop fires this tick.
-    pub fn update(&mut self, dt: f32, city: &crate::world::city::City, player_pos: Vector3, can_shoot: bool) -> bool {
+    pub fn update(&mut self, dt: f32, city: &crate::world::city::City, player_pos: Vector3, stars: u8) -> bool {
         self.prev_pos = self.pos;
         self.prev_yaw = self.yaw;
         if self.state == CopState::Dead {
             self.dead_timer -= dt;
             self.pos = vadd(self.pos, vscale(self.vel, dt));
             self.vel = vscale(self.vel, 1.0 - 5.0 * dt);
-            let push = city.resolve_circle(self.pos.x, self.pos.z, 0.4);
+            self.pos.y = city.get_ground_height(self.pos);
+            let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.4);
             self.pos.x += push.x;
             self.pos.z += push.z;
             return false;
         }
+
+        if stars == 0 {
+            // No wanted level: stand still and do nothing (patrol/idle)
+            self.vel = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+            self.pos.y = city.get_ground_height(self.pos);
+            let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.4);
+            self.pos.x += push.x;
+            self.pos.z += push.z;
+            return false;
+        }
+
         let to_player = vsub(player_pos, self.pos);
         let dist = vlen_xz(to_player);
         self.yaw = lerp_angle(self.yaw, yaw_from_dir(vnorm_xz(to_player)), 5.0 * dt);
 
         self.fire_cooldown = (self.fire_cooldown - dt).max(0.0);
+
+        let can_shoot = stars >= 2;
 
         if can_shoot && dist < 40.0 && dist > 2.0 {
             self.state = CopState::Shoot;
@@ -79,7 +93,11 @@ impl Cop {
                 self.pos = vadd(self.pos, vscale(fwd, speed * dt));
             }
         }
-        // If dist <= 1.8, stand still (don't overlap player).
+        // Building collision in 3D.
+        self.pos.y = city.get_ground_height(self.pos);
+        let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.4);
+        self.pos.x += push.x;
+        self.pos.z += push.z;
         false
     }
 

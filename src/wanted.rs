@@ -11,7 +11,15 @@ impl WantedSystem {
     pub fn new() -> Self {
         WantedSystem { heat: 0.0, stars: 0, decay_timer: 0.0, visible: false }
     }
+}
 
+impl Default for WantedSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WantedSystem {
     pub fn add_heat(&mut self, amount: f32) {
         self.heat = (self.heat + amount).min(6.0);
         self.decay_timer = 0.0;

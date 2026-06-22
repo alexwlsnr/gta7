@@ -90,7 +90,8 @@ impl Ped {
             self.dead_timer -= dt;
             self.pos = vadd(self.pos, vscale(self.vel, dt));
             self.vel = vscale(self.vel, 1.0 - 5.0 * dt);
-            let push = city.resolve_circle(self.pos.x, self.pos.z, 0.4);
+            self.pos.y = city.get_ground_height(self.pos);
+            let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.4);
             self.pos.x += push.x;
             self.pos.z += push.z;
             return;
@@ -128,8 +129,9 @@ impl Ped {
             }
             PedState::Dead => {}
         }
-        // Building collision.
-        let push = city.resolve_circle(self.pos.x, self.pos.z, 0.4);
+        // Building collision in 3D.
+        self.pos.y = city.get_ground_height(self.pos);
+        let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.4);
         if vlen_xz(push) > 0.01 {
             self.pos.x += push.x;
             self.pos.z += push.z;

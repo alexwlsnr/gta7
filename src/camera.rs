@@ -24,7 +24,15 @@ impl FollowCamera {
             height: 3.0,
         }
     }
+}
 
+impl Default for FollowCamera {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FollowCamera {
     /// Update camera based on player state (on foot or in vehicle).
     /// `look_dx/look_dy` are accumulated mouse deltas for this logic step.
     pub fn update(

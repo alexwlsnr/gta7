@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::world::city::City;
 use crate::vehicle::Vehicle;
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_hud(
     d: &mut RaylibDrawHandle,
     player: &Player,
@@ -143,6 +144,7 @@ fn draw_star(d: &mut RaylibDrawHandle, cx: i32, cy: i32, r: i32, color: Color) {
     d.draw_circle(cx, cy, (r as f32) * 0.5, Color::new(color.r / 2, color.g / 2, color.b / 2, 255));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_minimap(
     d: &mut RaylibDrawHandle,
     city: &City,
@@ -209,8 +211,8 @@ fn draw_minimap(
     }
 
     // Player arrow (center, pointing in yaw direction)
-    let yaw = if player.in_vehicle.is_some() {
-        vehicles[player.in_vehicle.unwrap()].yaw
+    let yaw = if let Some(vi) = player.in_vehicle {
+        vehicles[vi].yaw
     } else {
         player.yaw
     };

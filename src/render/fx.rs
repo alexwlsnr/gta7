@@ -1,7 +1,7 @@
 //! Particles, tracers, muzzle flashes, explosions, blood.
 use raylib::prelude::*;
 use raylib::ffi::Vector3;
-use crate::mathx::{vadd, vscale};
+use crate::mathx::{vadd, vsub, vscale};
 
 #[derive(Clone, Debug)]
 pub struct Particle {
@@ -27,16 +27,40 @@ pub struct Flash {
     pub life: f32,
 }
 
+#[derive(Clone, Debug)]
+pub struct Skidmark {
+    pub from: Vector3,
+    pub to: Vector3,
+    pub width: f32,
+    pub life: f32,
+    pub max_life: f32,
+}
+
 pub struct Fx {
     pub particles: Vec<Particle>,
     pub tracers: Vec<Tracer>,
     pub flashes: Vec<Flash>,
+    pub skidmarks: Vec<Skidmark>,
 }
 
 impl Fx {
     pub fn new() -> Self {
-        Fx { particles: Vec::new(), tracers: Vec::new(), flashes: Vec::new() }
+        Fx {
+            particles: Vec::new(),
+            tracers: Vec::new(),
+            flashes: Vec::new(),
+            skidmarks: Vec::new(),
+        }
     }
+}
+
+impl Default for Fx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Fx {
 
     pub fn burst(&mut self, pos: Vector3, count: usize, speed: f32, color: Color, life: f32, gravity: f32) {
         for _ in 0..count {
@@ -77,6 +101,16 @@ impl Fx {
         self.tracers.push(Tracer { from, to, life: 0.08 });
     }
 
+    pub fn add_skidmark(&mut self, from: Vector3, to: Vector3, width: f32, life: f32) {
+        self.skidmarks.push(Skidmark {
+            from,
+            to,
+            width,
+            life,
+            max_life: life,
+        });
+    }
+
     pub fn step(&mut self, dt: f32) {
         for p in &mut self.particles {
             p.life -= dt;
@@ -88,6 +122,8 @@ impl Fx {
         self.tracers.retain(|t| t.life > 0.0);
         for f in &mut self.flashes { f.life -= dt; }
         self.flashes.retain(|f| f.life > 0.0);
+        for s in &mut self.skidmarks { s.life -= dt; }
+        self.skidmarks.retain(|s| s.life > 0.0);
     }
 
     pub fn draw(&self, d3: &mut impl RaylibDraw3D) {
@@ -106,6 +142,30 @@ impl Fx {
         // Muzzle flashes as bright spheres.
         for f in &self.flashes {
             d3.draw_sphere(f.pos, 0.18, Color::new(255, 240, 180, 220));
+        }
+        // Skidmarks as flat quads (made of two triangles).
+        for s in &self.skidmarks {
+            let a = (s.life / s.max_life).clamp(0.0, 1.0);
+            let col = Color::new(20, 20, 20, (180.0 * a) as u8);
+            
+            let dir = vsub(s.to, s.from);
+            let len = (dir.x * dir.x + dir.z * dir.z).sqrt();
+            if len > 0.01 {
+                let norm = Vector3 { x: dir.x / len, y: 0.0, z: dir.z / len };
+                let perp = Vector3 { x: -norm.z, y: 0.0, z: norm.x };
+                let w_half = s.width * 0.5;
+                
+                let p1 = vsub(s.from, vscale(perp, w_half));
+                let p2 = vadd(s.from, vscale(perp, w_half));
+                let p3 = vadd(s.to, vscale(perp, w_half));
+                let p4 = vsub(s.to, vscale(perp, w_half));
+                
+                d3.draw_triangle3D(p1, p2, p3, col);
+                d3.draw_triangle3D(p1, p3, p4, col);
+                // Draw with reverse winding to handle backface culling
+                d3.draw_triangle3D(p3, p2, p1, col);
+                d3.draw_triangle3D(p4, p3, p1, col);
+            }
         }
     }
 }

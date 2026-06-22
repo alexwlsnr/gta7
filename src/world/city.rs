@@ -1,6 +1,7 @@
 //! Procedural grid city: blocks, buildings, roads, lane graph, traffic lights.
 use crate::config::Config;
 use crate::world::collision::AABB;
+use crate::mathx::*;
 use rand_chacha::ChaCha8Rng;
 use rand::{Rng, SeedableRng};
 use raylib::ffi::Vector3;
@@ -36,6 +37,15 @@ pub struct TrafficLight {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LightState { Red, Green }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Ramp {
+    pub pos: Vector3,
+    pub yaw: f32,
+    pub width: f32,
+    pub length: f32,
+    pub height: f32,
+}
+
 pub struct City {
     pub blocks: usize,
     pub block_size: f32,
@@ -45,6 +55,7 @@ pub struct City {
     pub parks: Vec<bool>,
     pub lanes: Vec<Lane>,
     pub lights: Vec<TrafficLight>,
+    pub ramps: Vec<Ramp>,
     pub ground_half: f32,
 }
 
@@ -140,6 +151,37 @@ impl City {
             }
         }
 
+        // Generate ramps on horizontal/vertical lanes (midpoints of blocks).
+        let mut ramps = Vec::new();
+        let mut lane_counter = 0;
+        for lane in &lanes {
+            let from_i = lane.from.0;
+            let from_j = lane.from.1;
+            let to_i = lane.to.0;
+            let to_j = lane.to.1;
+            
+            // Place on internal lanes only so we don't jump off map boundaries
+            if from_i > 0 && from_i < n as i32 && from_j > 0 && from_j < n as i32
+               && to_i > 0 && to_i < n as i32 && to_j > 0 && to_j < n as i32 {
+                lane_counter += 1;
+                // Place a ramp on every 7th internal lane
+                if lane_counter % 7 == 0 {
+                    let from_pos = Vector3 { x: origin + from_i as f32 * bs, y: 0.0, z: origin + from_j as f32 * bs };
+                    let to_pos = Vector3 { x: origin + to_i as f32 * bs, y: 0.0, z: origin + to_j as f32 * bs };
+                    let mid = vscale(vadd(from_pos, to_pos), 0.5);
+                    let dir = vnorm_xz(vsub(to_pos, from_pos));
+                    let yaw = yaw_from_dir(dir);
+                    ramps.push(Ramp {
+                        pos: mid,
+                        yaw,
+                        width: 5.5,
+                        length: 12.0,
+                        height: 3.5,
+                    });
+                }
+            }
+        }
+
         City {
             blocks: n,
             block_size: bs,
@@ -148,6 +190,7 @@ impl City {
             parks,
             lanes,
             lights,
+            ramps,
             ground_half: bs * n as f32 * 0.5,
         }
     }
@@ -181,6 +224,79 @@ impl City {
             pz += p.z;
         }
         push
+    }
+
+    /// Resolve a circle (XZ) against all nearby buildings in 3D.
+    /// If the entity's Y is above the building roof, horizontal collision is ignored (allowing rooftop driving/climbing).
+    pub fn resolve_circle_3d(&self, mut px: f32, py: f32, mut pz: f32, radius: f32) -> Vector3 {
+        let mut push = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+        for b in &self.buildings {
+            // If the entity's Y is above or at the building roof level, ignore horizontal collision.
+            if py >= b.box3d.max.y - 0.2 {
+                continue;
+            }
+            // Broad phase: skip buildings far away.
+            let dx = (b.box3d.center().x - px).abs();
+            let dz = (b.box3d.center().z - pz).abs();
+            let h = b.box3d.half();
+            if dx > h.x + radius + 2.0 || dz > h.z + radius + 2.0 {
+                continue;
+            }
+            let p = crate::world::collision::circle_vs_aabb(px, pz, radius, b.box3d);
+            push.x += p.x;
+            push.z += p.z;
+            px += p.x;
+            pz += p.z;
+        }
+        push
+    }
+
+    /// Checks if a position is on any ramp, returning the ground height at that point
+    /// and the ramp inclination angle.
+    pub fn get_ramp_height_and_angle(&self, pos: Vector3) -> Option<(f32, f32)> {
+        for r in &self.ramps {
+            // Convert pos to ramp local space
+            let rel = vsub(pos, r.pos);
+            let (sin, cos) = r.yaw.sin_cos();
+            // Rotate back into local coords
+            let local_x = rel.x * cos - rel.z * sin;
+            let local_z = rel.z * cos + rel.x * sin;
+            
+            if local_x.abs() <= r.width * 0.5 && local_z >= -r.length * 0.5 && local_z <= r.length * 0.5 {
+                let t = (local_z + r.length * 0.5) / r.length;
+                let height = t * r.height;
+                let angle = (r.height / r.length).atan();
+                return Some((height, angle));
+            }
+        }
+        None
+    }
+
+    /// Get the ground/solid surface height at a world position, taking into account flat roads,
+    /// ramp slopes, and building roofs.
+    pub fn get_ground_height(&self, pos: Vector3) -> f32 {
+        // 1. Check ramps
+        if let Some((h, _)) = self.get_ramp_height_and_angle(pos) {
+            return h;
+        }
+        
+        // 2. Check buildings (roofs)
+        let mut highest_roof = 0.0;
+        for b in &self.buildings {
+            if pos.x >= b.box3d.min.x && pos.x <= b.box3d.max.x
+               && pos.z >= b.box3d.min.z && pos.z <= b.box3d.max.z {
+                let roof_y = b.box3d.max.y;
+                // If entity is above or close to the roof, they can stand on it
+                if pos.y >= roof_y - 0.5 && roof_y > highest_roof {
+                    highest_roof = roof_y;
+                }
+            }
+        }
+        if highest_roof > 0.0 {
+            return highest_roof;
+        }
+
+        0.0
     }
 
     /// Find nearest intersection coords to a world position.

@@ -27,6 +27,7 @@ pub enum HitKind {
 }
 
 /// Fire the player's weapon. Returns the hit result for game logic (wanted, money).
+#[allow(clippy::too_many_arguments)]
 pub fn fire_weapon(
     player: &Player,
     cam_pos: Vector3,
@@ -66,7 +67,7 @@ pub fn fire_weapon(
     // Buildings (block shots).
     for b in &city.buildings {
         if let Some((t, _n)) = ray_vs_aabb(muzzle, dir, b.box3d, range) {
-            if best.map_or(true, |(bt, _)| t < bt) {
+            if best.is_none_or(|(bt, _)| t < bt) {
                 best = Some((t, HitKind::Building));
             }
         }
@@ -79,7 +80,7 @@ pub fn fire_weapon(
         }
         let box3d = ped_aabb(ped.pos);
         if let Some((t, _n)) = ray_vs_aabb(muzzle, dir, box3d, range) {
-            if best.map_or(true, |(bt, _)| t < bt) {
+            if best.is_none_or(|(bt, _)| t < bt) {
                 best = Some((t, HitKind::Ped(i)));
             }
         }
@@ -92,20 +93,22 @@ pub fn fire_weapon(
         }
         let box3d = cop_aabb(cop.pos);
         if let Some((t, _n)) = ray_vs_aabb(muzzle, dir, box3d, range) {
-            if best.map_or(true, |(bt, _)| t < bt) {
+            if best.is_none_or(|(bt, _)| t < bt) {
                 best = Some((t, HitKind::Cop(i)));
             }
         }
     }
 
-    // Vehicles.
+    // Vehicles (using local space transformation to support Oriented Bounding Box raycasting).
+    let local_aabb = AABB::from_center(0.0, 0.4, 0.0, 1.2, 0.8, 2.5);
     for (i, v) in vehicles.iter().enumerate() {
         if v.destroyed {
             continue;
         }
-        let box3d = vehicle_aabb(v.pos, v.yaw);
-        if let Some((t, _n)) = ray_vs_aabb(muzzle, dir, box3d, range) {
-            if best.map_or(true, |(bt, _)| t < bt) {
+        let local_ro = world_to_local_y(vsub(muzzle, v.pos), v.yaw);
+        let local_rd = world_to_local_y(dir, v.yaw);
+        if let Some((t, _n)) = ray_vs_aabb(local_ro, local_rd, local_aabb, range) {
+            if best.is_none_or(|(bt, _)| t < bt) {
                 best = Some((t, HitKind::Vehicle(i)));
             }
         }
@@ -204,6 +207,66 @@ fn ped_aabb(pos: Vector3) -> AABB {
 fn cop_aabb(pos: Vector3) -> AABB {
     AABB::from_center(pos.x, pos.y + 0.9, pos.z, 0.4, 0.9, 0.4)
 }
-fn vehicle_aabb(pos: Vector3, _yaw: f32) -> AABB {
-    AABB::from_center(pos.x, pos.y + 0.4, pos.z, 1.2, 0.8, 2.5)
+fn world_to_local_y(v: Vector3, yaw: f32) -> Vector3 {
+    let (sin, cos) = yaw.sin_cos();
+    Vector3 {
+        x: v.x * cos - v.z * sin,
+        y: v.y,
+        z: v.z * cos + v.x * sin,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_world_to_local_y() {
+        let v = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
+        // Yaw = PI/2 (vehicle facing +X).
+        // A point at world +X relative to the vehicle is straight ahead (+Z).
+        // So local coordinate should be (0, 0, 1).
+        let local_v = world_to_local_y(v, std::f32::consts::FRAC_PI_2);
+        assert!(local_v.x.abs() < 1e-5, "expected x ~ 0, got {}", local_v.x);
+        assert!((local_v.z - 1.0).abs() < 1e-5, "expected z ~ 1, got {}", local_v.z);
+    }
+
+    #[test]
+    fn test_vehicle_obb_raycast_hit() {
+        let local_aabb = AABB::from_center(0.0, 0.4, 0.0, 1.2, 0.8, 2.5);
+        let v_pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+        let v_yaw = std::f32::consts::FRAC_PI_2; // facing +X
+
+        // Firing along +X from (-5, 0.4, 0)
+        let muzzle = Vector3 { x: -5.0, y: 0.4, z: 0.0 };
+        let dir = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
+
+        let local_ro = world_to_local_y(vsub(muzzle, v_pos), v_yaw);
+        let local_rd = world_to_local_y(dir, v_yaw);
+
+        let hit = ray_vs_aabb(local_ro, local_rd, local_aabb, 100.0);
+        assert!(hit.is_some());
+        let (t, _) = hit.unwrap();
+        // local box is z: -2.5..2.5. Ray starts at local z = -5, direction is +Z.
+        // It hits the z = -2.5 face. So distance is 5.0 - 2.5 = 2.5.
+        assert!((t - 2.5).abs() < 1e-5, "expected t ~ 2.5, got {}", t);
+    }
+
+    #[test]
+    fn test_vehicle_obb_raycast_miss() {
+        let local_aabb = AABB::from_center(0.0, 0.4, 0.0, 1.2, 0.8, 2.5);
+        let v_pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+        let v_yaw = std::f32::consts::FRAC_PI_2; // facing +X
+
+        // Firing along +X from (-5, 0.4, 2.0).
+        // Since vehicle width is 1.2 (local X limits -1.2..1.2), this ray is offset at local X = -2.0, so it must miss.
+        let muzzle = Vector3 { x: -5.0, y: 0.4, z: 2.0 };
+        let dir = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
+
+        let local_ro = world_to_local_y(vsub(muzzle, v_pos), v_yaw);
+        let local_rd = world_to_local_y(dir, v_yaw);
+
+        let hit = ray_vs_aabb(local_ro, local_rd, local_aabb, 100.0);
+        assert!(hit.is_none());
+    }
 }

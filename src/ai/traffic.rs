@@ -43,10 +43,8 @@ impl TrafficCar {
         let mut should_stop = false;
         if near_end {
             for l in &city.lights {
-                if (l.pos.x - to.x).abs() < 1.0 && (l.pos.z - to.z).abs() < 1.0 {
-                    if l.state == crate::world::city::LightState::Red {
-                        should_stop = true;
-                    }
+                if (l.pos.x - to.x).abs() < 1.0 && (l.pos.z - to.z).abs() < 1.0 && l.state == crate::world::city::LightState::Red {
+                    should_stop = true;
                 }
             }
         }
@@ -59,7 +57,7 @@ impl TrafficCar {
             target_speed = 0.0;
         }
         if dist_to_player < 8.0 {
-            target_speed = target_speed * 0.3;
+            target_speed *= 0.3;
         }
 
         // Advance along lane.

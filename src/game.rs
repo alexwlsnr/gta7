@@ -192,7 +192,7 @@ impl<'a> Game<'a> {
                         continue;
                     }
                     let d = vdist_xz(v.pos, self.player.pos);
-                    if d < 5.0 && best.map_or(true, |(_, bd)| d < bd) {
+                    if d < 5.0 && best.is_none_or(|(_, bd)| d < bd) {
                         best = Some((i, d));
                     }
                 }
@@ -221,16 +221,99 @@ impl<'a> Game<'a> {
         self.look_accum_x = 0.0;
         self.look_accum_y = 0.0;
         if let Some(vi) = self.player.in_vehicle {
+            // Reconstruct previous wheel positions (using state before update_driven runs)
+            let prev_q_yaw = crate::render::models::Quat {
+                w: (self.vehicles[vi].yaw * 0.5).cos(),
+                x: 0.0,
+                y: (self.vehicles[vi].yaw * 0.5).sin(),
+                z: 0.0,
+            };
+            let prev_q_pitch = crate::render::models::Quat {
+                w: (self.vehicles[vi].pitch * 0.5).cos(),
+                x: (self.vehicles[vi].pitch * 0.5).sin(),
+                y: 0.0,
+                z: 0.0,
+            };
+            let prev_q_roll = crate::render::models::Quat {
+                w: (self.vehicles[vi].roll * 0.5).cos(),
+                x: 0.0,
+                y: 0.0,
+                z: (self.vehicles[vi].roll * 0.5).sin(),
+            };
+            let prev_q = prev_q_yaw * prev_q_pitch * prev_q_roll;
+            
+            let wl_local = Vector3 { x: -0.9, y: -0.4, z: -1.3 };
+            let wr_local = Vector3 { x: 0.9, y: -0.4, z: -1.3 };
+            
+            let prev_wl_pos = vadd(self.vehicles[vi].pos, crate::render::models::rotate_vector(wl_local, prev_q));
+            let prev_wr_pos = vadd(self.vehicles[vi].pos, crate::render::models::rotate_vector(wr_local, prev_q));
+
             let crashed = self.vehicles[vi].update_driven(input, &self.city, &self.cfg, dt);
             if crashed {
                 self.sfx.crash.play();
             }
+            // Stunt Jump Detection
+            if let Some(air_time) = self.vehicles[vi].just_landed_stunt {
+                let reward = (air_time * 300.0) as i64;
+                self.player.money += reward;
+                self.sfx.complete.play();
+                self.mission.show_banner(&format!("STUNT JUMP! +${}", reward));
+            }
+            
+            let car = &self.vehicles[vi];
+            let is_sliding = input.handbrake 
+                && car.speed.abs() > 4.0 
+                && car.pos.y <= self.city.get_ground_height(car.pos) + 0.05;
             // Spawn drift smoke/skid particles when handbraking at speed
-            if input.handbrake && self.vehicles[vi].speed.abs() > 4.0 {
-                let car = &self.vehicles[vi];
+            if is_sliding {
                 let fwd = dir_from_yaw(car.yaw);
                 let rear_pos = vsub(car.pos, vscale(fwd, 1.3));
                 self.fx.burst(rear_pos, 2, 1.2, Color::new(200, 200, 202, 130), 0.4, 0.2);
+
+                // Add skidmark segment slightly raised above the ground to avoid z-fighting
+                let cur_q_yaw = crate::render::models::Quat {
+                    w: (car.yaw * 0.5).cos(),
+                    x: 0.0,
+                    y: (car.yaw * 0.5).sin(),
+                    z: 0.0,
+                };
+                let cur_q_pitch = crate::render::models::Quat {
+                    w: (car.pitch * 0.5).cos(),
+                    x: (car.pitch * 0.5).sin(),
+                    y: 0.0,
+                    z: 0.0,
+                };
+                let cur_q_roll = crate::render::models::Quat {
+                    w: (car.roll * 0.5).cos(),
+                    x: 0.0,
+                    y: 0.0,
+                    z: (car.roll * 0.5).sin(),
+                };
+                let cur_q = cur_q_yaw * cur_q_pitch * cur_q_roll;
+
+                let cur_wl_pos = vadd(car.pos, crate::render::models::rotate_vector(wl_local, cur_q));
+                let cur_wr_pos = vadd(car.pos, crate::render::models::rotate_vector(wr_local, cur_q));
+
+                let prev_car_pos = car.prev_pos;
+                let cur_car_pos = car.pos;
+
+                let wl_from_ground = self.city.get_ground_height(Vector3 { x: prev_wl_pos.x, y: prev_car_pos.y, z: prev_wl_pos.z });
+                let wl_to_ground = self.city.get_ground_height(Vector3 { x: cur_wl_pos.x, y: cur_car_pos.y, z: cur_wl_pos.z });
+                let wr_from_ground = self.city.get_ground_height(Vector3 { x: prev_wr_pos.x, y: prev_car_pos.y, z: prev_wr_pos.z });
+                let wr_to_ground = self.city.get_ground_height(Vector3 { x: cur_wr_pos.x, y: cur_car_pos.y, z: cur_wr_pos.z });
+
+                let mut wl_from = prev_wl_pos;
+                let mut wl_to = cur_wl_pos;
+                let mut wr_from = prev_wr_pos;
+                let mut wr_to = cur_wr_pos;
+
+                wl_from.y = wl_from_ground + 0.015;
+                wl_to.y = wl_to_ground + 0.015;
+                wr_from.y = wr_from_ground + 0.015;
+                wr_to.y = wr_to_ground + 0.015;
+
+                self.fx.add_skidmark(wl_from, wl_to, 0.35, 10.0);
+                self.fx.add_skidmark(wr_from, wr_to, 0.35, 10.0);
             }
             // Player position follows vehicle.
             self.player.pos = self.vehicles[vi].pos;
@@ -332,10 +415,10 @@ impl<'a> Game<'a> {
         }
 
         // --- Cops ---
-        let cops_shoot = self.wanted.cops_shoot();
+        let stars = self.wanted.stars;
         let player_pos = self.player.pos;
         for cop in self.cops.iter_mut() {
-            let fired = cop.update(dt, &self.city, player_pos, cops_shoot);
+            let fired = cop.update(dt, &self.city, player_pos, stars);
             if fired {
                 let hit = cop_fire(cop.pos, player_pos, &mut self.fx);
                 if hit {
@@ -376,14 +459,16 @@ impl<'a> Game<'a> {
             }
         }
         // Despawn excess cops when wanted drops.
-        if self.cops.len() > target_cops + 2 {
+        let limit = if stars == 0 { 0 } else { target_cops + 2 };
+        if self.cops.len() > limit {
             // Remove farthest cops.
             self.cops.sort_by(|a, b| {
                 vdist_xz(a.pos, player_pos).partial_cmp(&vdist_xz(b.pos, player_pos)).unwrap()
             });
-            while self.cops.len() > target_cops + 2 {
+            let despawn_dist = if stars == 0 { 35.0 } else { 80.0 };
+            while self.cops.len() > limit {
                 if let Some(last) = self.cops.last() {
-                    if vdist_xz(last.pos, player_pos) > 80.0 {
+                    if vdist_xz(last.pos, player_pos) > despawn_dist {
                         self.cops.pop();
                     } else {
                         break;
@@ -727,7 +812,18 @@ impl<'a> Game<'a> {
             for v in &self.vehicles {
                 let rp = v.render_pos(alpha);
                 let ry = v.render_yaw(alpha);
-                draw_car(&mut d3, &self.assets, rp, ry, v.color, v.damage_level());
+                let rp_pitch = v.render_pitch(alpha);
+                let rp_roll = v.render_roll(alpha);
+                draw_car(
+                    &mut d3,
+                    &self.assets,
+                    rp,
+                    ry,
+                    rp_pitch,
+                    rp_roll,
+                    v.color,
+                    v.damage_level(),
+                );
             }
 
             // Peds.

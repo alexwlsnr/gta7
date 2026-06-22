@@ -5,6 +5,7 @@ use raylib::consts::MaterialMapIndex;
 
 use crate::config::Config;
 use crate::world::city::{Building, City, Axis};
+use crate::mathx::{vadd, vsub, vscale};
 
 /// Cached GPU assets built once at startup. Textures are kept as fields because
 /// the `Model`s hold raw pointers to them — they must outlive the models.
@@ -177,6 +178,64 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         }
     }
 
+    // Ramps (bright orange wedges).
+    for r in &city.ramps {
+        let slope = (r.height / r.length).atan();
+        let hypot = (r.height * r.height + r.length * r.length).sqrt();
+        
+        let half_yaw = r.yaw * 0.5;
+        let q_yaw = Quat {
+            w: half_yaw.cos(),
+            x: 0.0,
+            y: half_yaw.sin(),
+            z: 0.0,
+        };
+        let half_pitch = -slope * 0.5;
+        let q_pitch = Quat {
+            w: half_pitch.cos(),
+            x: half_pitch.sin(),
+            y: 0.0,
+            z: 0.0,
+        };
+        let q = q_yaw * q_pitch;
+        let (axis, angle_deg) = quat_to_axis_angle(q);
+        
+        let mid_pos = Vector3 { x: r.pos.x, y: r.pos.y + r.height * 0.5, z: r.pos.z };
+        
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            mid_pos,
+            axis, angle_deg,
+            Vector3 { x: r.width, y: 0.2, z: hypot },
+            Color::new(240, 110, 20, 255), // Bright orange deck
+        );
+        d3.draw_model_wires_ex(
+            &assets.plain_cube_model,
+            mid_pos,
+            axis, angle_deg,
+            Vector3 { x: r.width, y: 0.2, z: hypot },
+            Color::new(30, 30, 30, 255),
+        );
+        
+        // Support wall at high end
+        let high_local_offset = Vector3 { x: 0.0, y: 0.0, z: r.length * 0.5 };
+        let (sin_y, cos_y) = r.yaw.sin_cos();
+        let high_world_offset = Vector3 {
+            x: high_local_offset.z * sin_y,
+            y: 0.0,
+            z: high_local_offset.z * cos_y,
+        };
+        let high_pos = vadd(r.pos, high_world_offset);
+        
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            Vector3 { x: high_pos.x, y: r.height * 0.5, z: high_pos.z },
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 }, r.yaw.to_degrees(),
+            Vector3 { x: r.width, y: r.height, z: 0.2 },
+            Color::new(100, 100, 105, 255),
+        );
+    }
+
     // Buildings: textured model tinted per-building.
     for b in &city.buildings {
         draw_building(d3, b, assets, &p);
@@ -222,92 +281,120 @@ fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &
 
 /// Draw a car body at a position with a yaw (radians) and a color.
 /// Uses draw_model_ex for proper yaw rotation of the body + cabin.
-pub fn draw_car(d3: &mut impl RaylibDraw3D, assets: &Assets, pos: Vector3, yaw: f32, color: Color, damaged: f32) {
+#[allow(clippy::too_many_arguments)]
+pub fn draw_car(
+    d3: &mut impl RaylibDraw3D,
+    assets: &Assets,
+    pos: Vector3,
+    yaw: f32,
+    pitch: f32,
+    roll: f32,
+    color: Color,
+    damaged: f32,
+) {
     let body_w = 2.0;
     let body_h = 0.8;
     let body_l = 4.2;
-    let up = Vector3 { x: 0.0, y: 1.0, z: 0.0 };
-    let yaw_deg = yaw.to_degrees();
-    let (sx, sz) = (yaw.sin(), yaw.cos());
 
-    // Body: rotated cube model.
+    let half_yaw = yaw * 0.5;
+    let q_yaw = Quat {
+        w: half_yaw.cos(),
+        x: 0.0,
+        y: half_yaw.sin(),
+        z: 0.0,
+    };
+    let half_pitch = pitch * 0.5;
+    let q_pitch = Quat {
+        w: half_pitch.cos(),
+        x: half_pitch.sin(),
+        y: 0.0,
+        z: 0.0,
+    };
+    let half_roll = roll * 0.5;
+    let q_roll = Quat {
+        w: half_roll.cos(),
+        x: 0.0,
+        y: 0.0,
+        z: half_roll.sin(),
+    };
+    
+    let q = q_yaw * q_pitch * q_roll;
+    let (axis, angle_deg) = quat_to_axis_angle(q);
+
+    // Body
     d3.draw_model_ex(
         &assets.plain_cube_model,
         pos,
-        up, yaw_deg,
+        axis, angle_deg,
         Vector3 { x: body_w, y: body_h, z: body_l },
         color,
     );
-    // Body outline.
+    // Body outline
     d3.draw_model_wires_ex(
         &assets.plain_cube_model,
         pos,
-        up, yaw_deg,
+        axis, angle_deg,
         Vector3 { x: body_w, y: body_h, z: body_l },
         Color::new(20, 20, 20, 255),
     );
 
-    // Cabin: offset backward from center, rotated with the car.
-    let cabin_off_x = -0.2 * sx;
-    let cabin_off_z = -0.2 * sz;
-    let cabin_pos = Vector3 { x: pos.x + cabin_off_x, y: pos.y + 0.7, z: pos.z + cabin_off_z };
+    // Cabin: offset in local coordinates: Z = -0.2, Y = 0.7
+    let cabin_local = Vector3 { x: 0.0, y: 0.7, z: -0.2 };
+    let cabin_world = vadd(pos, rotate_vector(cabin_local, q));
     d3.draw_model_ex(
         &assets.plain_cube_model,
-        cabin_pos,
-        up, yaw_deg,
+        cabin_world,
+        axis, angle_deg,
         Vector3 { x: 1.6, y: 0.6, z: 2.0 },
         Color::new(60, 80, 110, 255),
     );
 
-    // Wheels (4 cylinders), positioned using rotated local offsets.
-    let wheel_offs = [
-        (body_w * 0.5, body_l * 0.32),
-        (-body_w * 0.5, body_l * 0.32),
-        (body_w * 0.5, -body_l * 0.32),
-        (-body_w * 0.5, -body_l * 0.32),
+    // Wheels (4 cylinders), positioned using rotated local offsets and drawn along wheel axis
+    let wheel_local_offsets = [
+        Vector3 { x: body_w * 0.5, y: -0.4, z: body_l * 0.32 },
+        Vector3 { x: -body_w * 0.5, y: -0.4, z: body_l * 0.32 },
+        Vector3 { x: body_w * 0.5, y: -0.4, z: -body_l * 0.32 },
+        Vector3 { x: -body_w * 0.5, y: -0.4, z: -body_l * 0.32 },
     ];
-    for (ox, oz) in wheel_offs {
-        let wx = pos.x + ox * sz + oz * sx;
-        let wz = pos.z - ox * sx + oz * sz;
-        d3.draw_cylinder(
-            Vector3 { x: wx, y: pos.y - 0.4, z: wz },
-            0.4, 0.4, 0.3, 10,
+    let local_wheel_axis = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
+    let world_wheel_axis = rotate_vector(local_wheel_axis, q);
+
+    for off in wheel_local_offsets {
+        let wheel_center = vadd(pos, rotate_vector(off, q));
+        let start = vsub(wheel_center, vscale(world_wheel_axis, 0.15));
+        let end = vadd(wheel_center, vscale(world_wheel_axis, 0.15));
+        
+        d3.draw_cylinder_ex(
+            start, end,
+            0.4, 0.4, 10,
             Color::new(25, 25, 25, 255),
         );
     }
 
-    // Headlights (front, white) + taillights (rear, red).
-    let fwd_x = sx * body_l * 0.5;
-    let fwd_z = sz * body_l * 0.5;
-    let right_x = sz * body_w * 0.4;
-    let right_z = -sx * body_w * 0.4;
-    d3.draw_cube(
-        Vector3 { x: pos.x + fwd_x + right_x, y: pos.y, z: pos.z + fwd_z + right_z },
-        0.3, 0.2, 0.2,
-        Color::new(255, 255, 200, 255),
-    );
-    d3.draw_cube(
-        Vector3 { x: pos.x + fwd_x - right_x, y: pos.y, z: pos.z + fwd_z - right_z },
-        0.3, 0.2, 0.2,
-        Color::new(255, 255, 200, 255),
-    );
-    d3.draw_cube(
-        Vector3 { x: pos.x - fwd_x + right_x, y: pos.y, z: pos.z - fwd_z + right_z },
-        0.3, 0.2, 0.2,
-        Color::new(200, 40, 40, 255),
-    );
-    d3.draw_cube(
-        Vector3 { x: pos.x - fwd_x - right_x, y: pos.y, z: pos.z - fwd_z - right_z },
-        0.3, 0.2, 0.2,
-        Color::new(200, 40, 40, 255),
-    );
+    // Headlights (front, white) + taillights (rear, red)
+    let light_offsets_color = [
+        (Vector3 { x: body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
+        (Vector3 { x: -body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
+        (Vector3 { x: body_w * 0.4, y: 0.0, z: -body_l * 0.5 }, Color::new(200, 40, 40, 255)),
+        (Vector3 { x: -body_w * 0.4, y: 0.0, z: -body_l * 0.5 }, Color::new(200, 40, 40, 255)),
+    ];
+    for (off, col) in light_offsets_color {
+        let light_pos = vadd(pos, rotate_vector(off, q));
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            light_pos,
+            axis, angle_deg,
+            Vector3 { x: 0.3, y: 0.2, z: 0.2 },
+            col,
+        );
+    }
 
-    // Damage smoke.
+    // Damage smoke
     if damaged > 0.4 {
         d3.draw_model_wires_ex(
             &assets.plain_cube_model,
             pos,
-            up, yaw_deg,
+            axis, angle_deg,
             Vector3 { x: body_w + 0.05, y: body_h + 0.05, z: body_l + 0.05 },
             Color::new(60, 40, 30, 255),
         );
@@ -325,6 +412,7 @@ pub enum HairStyle {
 
 /// Draw a humanoid character: capsule body + head, tinted by `color`.
 /// Supports variable shirt/pants/hair colors, hairstyles, and sunglasses.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_character(
     d3: &mut impl RaylibDraw3D,
     assets: &Assets,
@@ -568,4 +656,57 @@ pub fn draw_mission_marker(d3: &mut impl RaylibDraw3D, pos: Vector3, color: Colo
         1.2 * pulse, 1.2 * pulse, 4.0, 16,
         Color::new(color.r, color.g, color.b, 80),
     );
+}
+
+// --- Quaternion Math Helpers for 3D Rotations ---
+
+#[derive(Clone, Copy, Debug)]
+pub struct Quat {
+    pub w: f32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+impl std::ops::Mul for Quat {
+    type Output = Self;
+    fn mul(self, other: Self) -> Self {
+        Quat {
+            w: self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
+            x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            y: self.w * other.y - self.x * other.z + self.y * other.w + self.z * other.x,
+            z: self.w * other.z + self.x * other.y - self.y * other.x + self.z * other.w,
+        }
+    }
+}
+
+pub fn quat_to_axis_angle(q: Quat) -> (Vector3, f32) {
+    let len = (q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z).sqrt();
+    if len < 1e-6 {
+        return (Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.0);
+    }
+    let w = q.w / len;
+    let x = q.x / len;
+    let y = q.y / len;
+    let z = q.z / len;
+
+    let sin_half = (1.0 - w * w).sqrt();
+    if sin_half < 1e-6 {
+        (Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.0)
+    } else {
+        let angle = 2.0 * w.acos().to_degrees();
+        let axis = Vector3 {
+            x: x / sin_half,
+            y: y / sin_half,
+            z: z / sin_half,
+        };
+        (axis, angle)
+    }
+}
+
+pub fn rotate_vector(v: Vector3, q: Quat) -> Vector3 {
+    let q_vec = Quat { w: 0.0, x: v.x, y: v.y, z: v.z };
+    let q_conj = Quat { w: q.w, x: -q.x, y: -q.y, z: -q.z };
+    let rotated = q * q_vec * q_conj;
+    Vector3 { x: rotated.x, y: rotated.y, z: rotated.z }
 }

@@ -178,8 +178,9 @@ impl Player {
         // Integrate
         self.pos = vadd(self.pos, vscale(self.vel, dt));
         // Ground
-        if self.pos.y <= 0.0 {
-            self.pos.y = 0.0;
+        let ground_h = city.get_ground_height(self.pos);
+        if self.pos.y <= ground_h {
+            self.pos.y = ground_h;
             self.vel.y = 0.0;
             self.on_ground = true;
         }
@@ -187,8 +188,8 @@ impl Player {
         let lim = cfg.world_half() - 2.0;
         self.pos.x = clamp(self.pos.x, -lim, lim);
         self.pos.z = clamp(self.pos.z, -lim, lim);
-        // Building collision (radius 0.5)
-        let push = city.resolve_circle(self.pos.x, self.pos.z, 0.5);
+        // Building collision (radius 0.5) in 3D
+        let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.5);
         self.pos.x += push.x;
         self.pos.z += push.z;
 

@@ -44,7 +44,15 @@ impl MissionState {
             banner_timer: 0.0,
         }
     }
+}
 
+impl Default for MissionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MissionState {
     pub fn show_banner(&mut self, text: &str) {
         self.banner = text.to_string();
         self.banner_timer = 4.0;
@@ -143,13 +151,12 @@ impl MissionState {
                             }
                         }
                     }
-                    MissionType::DeliverCar => {
-                        if in_vehicle && vdist_xz(player_pos, self.marker) < 5.0 {
-                            self.phase = MissionPhase::Complete;
-                            self.show_banner("Delivered! Reward earned.");
-                            return (self.reward, false);
-                        }
+                    MissionType::DeliverCar if in_vehicle && vdist_xz(player_pos, self.marker) < 5.0 => {
+                        self.phase = MissionPhase::Complete;
+                        self.show_banner("Delivered! Reward earned.");
+                        return (self.reward, false);
                     }
+                    MissionType::DeliverCar => {}
                     MissionType::Survive => {
                         self.timer -= dt;
                         if self.timer <= 0.0 {
