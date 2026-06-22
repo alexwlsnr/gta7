@@ -11,7 +11,7 @@ fn main() {
         .build();
     let cfg = Config::default();
     rl.set_target_fps(cfg.logic_rate.hz() as u32);
-    rl.disable_cursor();
+    rl.enable_cursor();
     // ESC opens the pause menu instead of closing the window.
     rl.set_exit_key(None);
 
@@ -20,13 +20,18 @@ fn main() {
 
     let mut game = Game::new(&mut rl, &thread, cfg, &audio);
     let mut clock = Clock::new(game.cfg.logic_rate);
+    let mut cursor_enabled = true;
 
     while !rl.window_should_close() {
-        // Sync cursor state based on game screen/pause state
-        if game.paused || game.screen_state == gta7::game::ScreenState::Title {
-            rl.enable_cursor();
-        } else {
-            rl.disable_cursor();
+        // Sync cursor state based on game screen/pause state transitions
+        let target_cursor = game.paused || game.screen_state == gta7::game::ScreenState::Title;
+        if target_cursor != cursor_enabled {
+            cursor_enabled = target_cursor;
+            if cursor_enabled {
+                rl.enable_cursor();
+            } else {
+                rl.disable_cursor();
+            }
         }
 
         // ESC toggles pause in-game, or exits the game from the start menu.
