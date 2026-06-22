@@ -17,6 +17,27 @@ uniform sampler2D texture0;
 
 out vec4 finalColor;
 
+float compute_shadow() {
+    if (fragLightSpacePos.w == 0.0) {
+        return 1.0;
+    }
+    // Perform perspective/orthogonal projection divide
+    vec3 projCoords = fragLightSpacePos.xyz / fragLightSpacePos.w;
+    // Transform to [0,1] range
+    projCoords = projCoords * 0.5 + 0.5;
+    // Keep shadows inside light frustum boundaries
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 || 
+        projCoords.y < 0.0 || projCoords.y > 1.0 || 
+        projCoords.z > 1.0) {
+        return 1.0; // fully lit
+    }
+    float closestDepth = texture(u_shadowMap, projCoords.xy).r;
+    float currentDepth = projCoords.z;
+    // Shadow bias to prevent acne.
+    float bias = 0.005;
+    return currentDepth - bias < closestDepth ? 1.0 : 0.4;
+}
+
 void main() {
     vec4 texColor = texture(texture0, fragTexCoord);
     vec3 baseColor = texColor.rgb * fragColor.rgb;
@@ -34,14 +55,22 @@ void main() {
         lightDir = -u_lightDir / lightDirLen;
     }
 
-    // Diffuse term
+    // Diffuse term with shadow attenuation
     float diff = max(dot(normal, lightDir), 0.0);
-    vec3 diffuse = u_lightColor * baseColor * diff;
+    float shadow = compute_shadow();
+    vec3 diffuse = u_lightColor * baseColor * diff * shadow;
 
     // Ambient term
     vec3 ambient = u_ambientColor * baseColor;
 
     // Final output combining ambient + diffuse
     vec3 lit = ambient + diffuse;
-    finalColor = vec4(lit, fragColor.a * texColor.a);
+
+    // Exponential fog based on camera distance
+    float dist = length(u_cameraPos - fragWorldPos);
+    float fogFactor = 1.0 - exp(-u_fogDensity * dist);
+    fogFactor = clamp(fogFactor, 0.0, 1.0);
+
+    vec3 final = mix(lit, u_fogColor, fogFactor);
+    finalColor = vec4(final, fragColor.a * texColor.a);
 }
