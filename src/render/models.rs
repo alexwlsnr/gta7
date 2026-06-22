@@ -5,7 +5,7 @@ use raylib::consts::MaterialMapIndex;
 
 use crate::config::Config;
 use crate::world::city::{Building, City, Axis};
-use crate::vehicle::Vehicle;
+use crate::vehicle::{Vehicle, VehicleKind};
 use crate::ai::ped::Ped;
 use crate::ai::cop::Cop;
 use crate::player::Player;
@@ -334,6 +334,8 @@ pub fn draw_car(
     roll: f32,
     color: Color,
     damaged: f32,
+    kind: VehicleKind,
+    time: f32,
 ) {
     let body_w = 2.0;
     let body_h = 0.8;
@@ -364,13 +366,24 @@ pub fn draw_car(
     let q = q_yaw * q_pitch * q_roll;
     let (axis, angle_deg) = quat_to_axis_angle(q);
 
+    let body_color = if kind == VehicleKind::Police {
+        Color::new(20, 20, 20, 255)
+    } else {
+        color
+    };
+    let cabin_color = if kind == VehicleKind::Police {
+        Color::new(245, 245, 245, 255)
+    } else {
+        Color::new(60, 80, 110, 255)
+    };
+
     // Body
     d3.draw_model_ex(
         &assets.plain_cube_model,
         pos,
         axis, angle_deg,
         Vector3 { x: body_w, y: body_h, z: body_l },
-        color,
+        body_color,
     );
     // Body outline
     d3.draw_model_wires_ex(
@@ -389,8 +402,48 @@ pub fn draw_car(
         cabin_world,
         axis, angle_deg,
         Vector3 { x: 1.6, y: 0.6, z: 2.0 },
-        Color::new(60, 80, 110, 255),
+        cabin_color,
     );
+
+    if kind == VehicleKind::Police {
+        // Dark bar base
+        let bar_local = Vector3 { x: 0.0, y: 1.05, z: -0.2 };
+        let bar_world = vadd(pos, rotate_vector(bar_local, q));
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            bar_world,
+            axis, angle_deg,
+            Vector3 { x: 1.2, y: 0.1, z: 0.25 },
+            Color::new(30, 30, 30, 255),
+        );
+
+        // Flashing lights (alternate red and blue)
+        let red_flash = (time * 12.0).sin() > 0.0;
+        let left_color = if red_flash { Color::new(255, 30, 30, 255) } else { Color::new(50, 0, 0, 255) };
+        let right_color = if !red_flash { Color::new(30, 30, 255, 255) } else { Color::new(0, 0, 50, 255) };
+
+        // Left siren dome
+        let left_local = Vector3 { x: -0.35, y: 1.15, z: -0.2 };
+        let left_world = vadd(pos, rotate_vector(left_local, q));
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            left_world,
+            axis, angle_deg,
+            Vector3 { x: 0.3, y: 0.12, z: 0.2 },
+            left_color,
+        );
+
+        // Right siren dome
+        let right_local = Vector3 { x: 0.35, y: 1.15, z: -0.2 };
+        let right_world = vadd(pos, rotate_vector(right_local, q));
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            right_world,
+            axis, angle_deg,
+            Vector3 { x: 0.3, y: 0.12, z: 0.2 },
+            right_color,
+        );
+    }
 
     // Wheels (4 cylinders), positioned using rotated local offsets and drawn along wheel axis
     let wheel_local_offsets = [

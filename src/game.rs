@@ -12,7 +12,7 @@ use crate::camera::FollowCamera;
 use crate::combat::{fire_weapon, melee_attack, cop_fire, HitKind};
 use crate::wanted::WantedSystem;
 use crate::ai::ped::Ped;
-use crate::ai::cop::Cop;
+use crate::ai::cop::{Cop, PoliceCar, spawn_police_car};
 use crate::ai::traffic::{TrafficCar, spawn_traffic};
 use crate::pickup::{Pickup, Shop, ShopKind};
 use crate::mission::MissionState;
@@ -29,6 +29,7 @@ pub struct Game<'a> {
     pub peds: Vec<Ped>,
     pub cops: Vec<Cop>,
     pub traffic: Vec<TrafficCar>,
+    pub police_cars: Vec<PoliceCar>,
     pub pickups: Vec<Pickup>,
     pub shops: Vec<Shop>,
     pub wanted: WantedSystem,
@@ -145,6 +146,7 @@ impl<'a> Game<'a> {
             peds,
             cops: Vec::new(),
             traffic,
+            police_cars: Vec::new(),
             pickups,
             shops,
             wanted: WantedSystem::new(),
@@ -440,6 +442,14 @@ impl<'a> Game<'a> {
         let stars = self.wanted.stars;
         let player_pos = self.player.pos;
         for cop in self.cops.iter_mut() {
+            // If in car, sync position to vehicle and skip on-foot update
+            if let Some(vi) = cop.in_car {
+                cop.pos = self.vehicles[vi].pos;
+                cop.yaw = self.vehicles[vi].yaw;
+                cop.prev_pos = cop.pos;
+                cop.prev_yaw = cop.yaw;
+                continue;
+            }
             let fired = cop.update(dt, &self.city, player_pos, stars);
             if fired {
                 let hit = cop_fire(cop.pos, player_pos, &mut self.fx);
@@ -464,6 +474,70 @@ impl<'a> Game<'a> {
             }
         }
         self.cops.retain(|c| !c.should_despawn());
+
+        // --- Police Cars ---
+        // 1. Despawn excess police cars when wanted drops or after death.
+        let target_police_cars = match stars {
+            0..=2 => 0,
+            3 => 1,
+            4 => 2,
+            5 => 3,
+            _ => 4,
+        };
+
+        let pc_limit = if stars == 0 { 0 } else { target_police_cars + 1 };
+        if self.police_cars.len() > pc_limit {
+            // Remove farthest police cars
+            self.police_cars.sort_by(|a, b| {
+                let va = &self.vehicles[a.vehicle_idx];
+                let vb = &self.vehicles[b.vehicle_idx];
+                vdist_xz(va.pos, player_pos).partial_cmp(&vdist_xz(vb.pos, player_pos)).unwrap()
+            });
+            let despawn_dist = if stars == 0 { 35.0 } else { 80.0 };
+            while self.police_cars.len() > pc_limit {
+                if let Some(pc) = self.police_cars.last() {
+                    let v = &self.vehicles[pc.vehicle_idx];
+                    if vdist_xz(v.pos, player_pos) > despawn_dist {
+                        // Clear the cops associated with this car
+                        let car_idx = pc.vehicle_idx;
+                        self.cops.retain(|c| c.in_car != Some(car_idx));
+                        self.police_cars.pop();
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // 2. Retain only active police cars that are not destroyed and still have cops inside.
+        let vehicles = &self.vehicles;
+        let cops = &self.cops;
+        self.police_cars.retain(|pc| {
+            let v = &vehicles[pc.vehicle_idx];
+            let has_cop = cops.iter().any(|c| c.in_car == Some(pc.vehicle_idx));
+            !v.destroyed && has_cop
+        });
+
+        // 3. Update active police cars
+        let player_in_vehicle = self.player.in_vehicle.is_some();
+        for i in 0..self.police_cars.len() {
+            let mut pc = self.police_cars[i].clone();
+            pc.update(&self.city, &mut self.vehicles, &mut self.cops, player_pos, player_in_vehicle, dt);
+            self.police_cars[i] = pc;
+        }
+
+        // 4. Spawn police cars if we are below the target count
+        if self.police_cars.len() < target_police_cars {
+            spawn_police_car(
+                &self.city,
+                &mut self.vehicles,
+                &mut self.cops,
+                &mut self.police_cars,
+                player_pos,
+            );
+        }
 
         // Spawn/despawn cops based on wanted level.
         let target_cops = self.wanted.target_cop_count();
@@ -883,6 +957,8 @@ impl<'a> Game<'a> {
                     rp_roll,
                     v.color,
                     v.damage_level(),
+                    v.kind,
+                    self.time,
                 );
             }
 
