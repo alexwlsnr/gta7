@@ -90,7 +90,7 @@ impl Config {
 
 pub struct Palette;
 impl Palette {
-    pub fn road(&self) -> Color { Color::new(34, 34, 38, 255) }
+    pub fn road(&self) -> Color { Color::new(72, 72, 78, 255) }
     pub fn sidewalk(&self) -> Color { Color::new(120, 122, 128, 255) }
     pub fn grass(&self) -> Color { Color::new(54, 110, 60, 255) }
     pub fn building(&self, i: u32) -> Color {
