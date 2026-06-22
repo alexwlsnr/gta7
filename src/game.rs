@@ -320,6 +320,15 @@ impl<'a> Game<'a> {
             self.player.update_on_foot(input, &self.city, &self.cfg, dt);
         }
 
+        // --- Engine sound ---
+        if let Some(vi) = self.player.in_vehicle {
+            let car = &self.vehicles[vi];
+            let throttle = input.move_y.abs();
+            self.sfx.update_engine(true, car.speed, throttle);
+        } else {
+            self.sfx.update_engine(false, 0.0, 0.0);
+        }
+
         // --- Camera ---
         self.camera.update(
             &self.player, &self.vehicles,
@@ -742,6 +751,7 @@ impl<'a> Game<'a> {
 
     /// Render one frame with interpolation alpha.
     pub fn render(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, alpha: f32, fps: i32) {
+        self.sfx.update_music();
         let cam = self.camera.to_camera3d();
         let cam_pos = self.camera.pos;
         let cam_fwd = self.camera.forward();

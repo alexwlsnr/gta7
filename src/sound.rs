@@ -8,6 +8,7 @@ pub struct SoundEffects<'a> {
     pub crash: Sound<'a>,
     pub complete: Sound<'a>,
     pub enter_exit: Sound<'a>,
+    pub engine: Music<'a>,
 }
 
 impl<'a> SoundEffects<'a> {
@@ -42,13 +43,50 @@ impl<'a> SoundEffects<'a> {
         let wave_enter_exit = audio.new_wave_from_memory(".wav", &enter_exit_wav).unwrap();
         let enter_exit = audio.new_sound_from_wave(&wave_enter_exit).unwrap();
 
+        // 6. Engine loop — continuous low rumble, pitch/volume modulated at runtime.
+        let engine_samples = gen_engine();
+        let engine_wav = make_wav_mono_16bit(22050, &engine_samples);
+        let mut engine = audio.new_music_from_memory(".wav", &engine_wav).unwrap();
+        engine.set_looping(true);
+        engine.set_volume(0.0); // silent until player enters a vehicle
+
         SoundEffects {
             shoot,
             explosion,
             crash,
             complete,
             enter_exit,
+            engine,
         }
+    }
+
+    /// Update engine sound based on vehicle speed and throttle.
+    /// `speed` is signed forward speed (m/s). `throttle` is 0..1 (how much gas).
+    /// `in_vehicle` = true if player is driving.
+    pub fn update_engine(&mut self, in_vehicle: bool, speed: f32, throttle: f32) {
+        if in_vehicle {
+            if !self.engine.is_stream_playing() {
+                self.engine.play_stream();
+            }
+            // Speed ratio: 0 (idle) to 1 (max speed ~40 m/s).
+            let speed_ratio = (speed.abs() / 40.0).clamp(0.0, 1.0);
+            // Pitch: idle at 0.7, redline at 2.0.
+            let pitch = 0.7 + speed_ratio * 1.3;
+            // Volume: idle hum at 0.15, full at 0.4. Throttle adds a bit.
+            let volume = 0.15 + speed_ratio * 0.2 + throttle * 0.05;
+            self.engine.set_pitch(pitch);
+            self.engine.set_volume(volume.min(0.4));
+        } else {
+            // Fade out and stop when not in vehicle.
+            if self.engine.is_stream_playing() {
+                self.engine.stop_stream();
+            }
+        }
+    }
+
+    /// Must be called every frame to keep the music stream fed.
+    pub fn update_music(&self) {
+        self.engine.update_stream();
     }
 }
 
@@ -171,6 +209,36 @@ fn gen_beep() -> Vec<i16> {
         let val = phase.sin();
         let env = 1.0 - t / duration;
         let s = (val * env * 12000.0) as i16;
+        samples.push(s);
+    }
+    samples
+}
+
+/// Generate a 1-second looping engine rumble.
+/// Low-frequency sawtooth base + harmonics + slight noise for texture.
+/// Pitch and volume are modulated at runtime via Music::set_pitch/set_volume.
+fn gen_engine() -> Vec<i16> {
+    let mut samples = Vec::new();
+    let duration = 1.0;
+    let sample_rate = 22050.0;
+    let num_samples = (sample_rate * duration) as usize;
+    // Base idle frequency — low rumble.
+    let base_freq = 80.0;
+    for i in 0..num_samples {
+        let t = i as f32 / sample_rate;
+        // Sawtooth: rich harmonics for engine character.
+        let phase = (t * base_freq) % 1.0;
+        let saw = 2.0 * phase - 1.0;
+        // Second harmonic for a deeper growl.
+        let h2 = ((t * base_freq * 2.0) % 1.0 * 2.0 - 1.0) * 0.3;
+        // Sub-bass sine for body.
+        let sub = (t * base_freq * 0.5 * TAU).sin() * 0.2;
+        // Slight noise for mechanical texture.
+        let noise = (rand::random::<f32>() - 0.5) * 0.15;
+        let val = saw * 0.5 + h2 + sub + noise;
+        // Gentle amplitude wobble for realism.
+        let wobble = 0.9 + 0.1 * (t * 8.0 * TAU).sin();
+        let s = (val * wobble * 8000.0) as i16;
         samples.push(s);
     }
     samples
