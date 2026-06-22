@@ -1,6 +1,115 @@
 //! Procedural audio synthesis for retro GTA-style sounds (no external assets).
 use std::f32::consts::TAU;
 use raylib::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::os::raw::c_void;
+
+use crate::sound_tracks::{RADIO_TRACKS, WALK_TRACKS, WANTED_TRACKS};
+
+pub static CURRENT_AMPLITUDE: AtomicU32 = AtomicU32::new(0);
+pub static CALLBACK_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub static BAR_AMPLITUDES: [AtomicU32; 6] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+
+static FILTER_V0: AtomicU32 = AtomicU32::new(0);
+static FILTER_V1: AtomicU32 = AtomicU32::new(0);
+static FILTER_V2: AtomicU32 = AtomicU32::new(0);
+static FILTER_V3: AtomicU32 = AtomicU32::new(0);
+static FILTER_PREV_X: AtomicU32 = AtomicU32::new(0);
+static FILTER_PREV_PREV_X: AtomicU32 = AtomicU32::new(0);
+
+pub unsafe extern "C" fn audio_processor_callback(data: *mut c_void, frames: u32) {
+    if data.is_null() || frames == 0 {
+        return;
+    }
+    CALLBACK_COUNT.fetch_add(1, Ordering::Relaxed);
+    let samples = data as *const f32;
+    let sample_count = (frames * 2) as usize; // Stereo: 2 channels
+    
+    // Load current filter states
+    let mut v0 = f32::from_bits(FILTER_V0.load(Ordering::Relaxed));
+    let mut v1 = f32::from_bits(FILTER_V1.load(Ordering::Relaxed));
+    let mut v2 = f32::from_bits(FILTER_V2.load(Ordering::Relaxed));
+    let mut v3 = f32::from_bits(FILTER_V3.load(Ordering::Relaxed));
+    let mut prev_x = f32::from_bits(FILTER_PREV_X.load(Ordering::Relaxed));
+    let mut prev_prev_x = f32::from_bits(FILTER_PREV_PREV_X.load(Ordering::Relaxed));
+    
+    // Load current envelopes
+    let mut envs = [0.0f32; 6];
+    for i in 0..6 {
+        envs[i] = f32::from_bits(BAR_AMPLITUDES[i].load(Ordering::Relaxed));
+    }
+    
+    let mut overall_max = 0.0f32;
+
+    for i in (0..sample_count).step_by(2) {
+        let left = *samples.add(i);
+        let right = if i + 1 < sample_count { *samples.add(i + 1) } else { left };
+        let x = (left + right) * 0.5;
+        
+        let abs_x = x.abs();
+        if abs_x > overall_max {
+            overall_max = abs_x;
+        }
+        
+        // Filter equations
+        v0 = v0 * 0.90 + x * 0.10;
+        v1 = v1 * 0.75 + x * 0.25;
+        v2 = v2 * 0.50 + x * 0.50;
+        v3 = v3 * 0.20 + x * 0.80;
+        
+        let d1 = x - prev_x;
+        let d2 = x - 2.0 * prev_x + prev_prev_x;
+        
+        // Update history
+        prev_prev_x = prev_x;
+        prev_x = x;
+        
+        // Rectified bands
+        let b0 = v0.abs();
+        let b1 = (v1 - v0).abs();
+        let b2 = (v2 - v1).abs();
+        let b3 = (v3 - v2).abs();
+        let b4 = d1.abs();
+        let b5 = d2.abs();
+        
+        // Peak followers (fast attack, slow decay)
+        envs[0] = if b0 > envs[0] { b0 } else { envs[0] * 0.995 + b0 * 0.005 };
+        envs[1] = if b1 > envs[1] { b1 } else { envs[1] * 0.995 + b1 * 0.005 };
+        envs[2] = if b2 > envs[2] { b2 } else { envs[2] * 0.995 + b2 * 0.005 };
+        envs[3] = if b3 > envs[3] { b3 } else { envs[3] * 0.995 + b3 * 0.005 };
+        envs[4] = if b4 > envs[4] { b4 } else { envs[4] * 0.995 + b4 * 0.005 };
+        envs[5] = if b5 > envs[5] { b5 } else { envs[5] * 0.995 + b5 * 0.005 };
+    }
+    
+    // Save filter states
+    FILTER_V0.store(v0.to_bits(), Ordering::Relaxed);
+    FILTER_V1.store(v1.to_bits(), Ordering::Relaxed);
+    FILTER_V2.store(v2.to_bits(), Ordering::Relaxed);
+    FILTER_V3.store(v3.to_bits(), Ordering::Relaxed);
+    FILTER_PREV_X.store(prev_x.to_bits(), Ordering::Relaxed);
+    FILTER_PREV_PREV_X.store(prev_prev_x.to_bits(), Ordering::Relaxed);
+    
+    // Save envelopes
+    for i in 0..6 {
+        BAR_AMPLITUDES[i].store(envs[i].to_bits(), Ordering::Relaxed);
+    }
+    
+    // Overall amplitude smoothing
+    let current_bits = CURRENT_AMPLITUDE.load(Ordering::Relaxed);
+    let current_amp = f32::from_bits(current_bits);
+    let smoothed = current_amp * 0.8 + overall_max * 0.2;
+    CURRENT_AMPLITUDE.store(smoothed.to_bits(), Ordering::Relaxed);
+}
+
+use std::sync::mpsc::{channel, Sender, Receiver};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoundMode {
@@ -19,13 +128,19 @@ pub struct SoundEffects<'a> {
     pub sfx_volume: f32,
     pub music_volume: f32,
     
-    // Baked MP3 streams
-    pub radio: Vec<Music<'a>>,
-    pub walk_tracks: Vec<Music<'a>>,
-    pub wanted_tracks: Vec<Music<'a>>,
+    // Dynamic stream loading state
+    pub audio_device: &'a RaylibAudio,
+    pub current_music: Option<Music<'a>>,
+    pub current_bytes: Option<Vec<u8>>,
+    
+    pub rx_bytes: Receiver<Result<(String, Vec<u8>), String>>,
+    pub tx_bytes: Sender<Result<(String, Vec<u8>), String>>,
+    pub is_loading: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub current_loading_url: Option<String>,
     
     pub current_mode: SoundMode,
     pub active_track_idx: usize,
+    pub music_paused: bool,
 }
 
 impl<'a> SoundEffects<'a> {
@@ -66,59 +181,12 @@ impl<'a> SoundEffects<'a> {
         let wave_engine = audio.new_wave_from_memory(".wav", &engine_wav).unwrap();
         let engine = audio.new_sound_from_wave(&wave_engine).unwrap();
 
-        // 7. Radio (Kevin MacLeod MP3 files baked into the binary)
-        let mut radio = Vec::new();
-        
-        let radio_files = &[
-            include_bytes!("../assets/music/GoCart.mp3").as_slice(),
-            include_bytes!("../assets/music/LaserGroove.mp3").as_slice(),
-            include_bytes!("../assets/music/RetroFutureClean.mp3").as_slice(),
-            include_bytes!("../assets/music/RetroFutureDirty.mp3").as_slice(),
-            include_bytes!("../assets/music/FunkGameLoop.mp3").as_slice(),
-            include_bytes!("../assets/music/SpaceFighterLoop.mp3").as_slice(),
-            include_bytes!("../assets/music/Loopster.mp3").as_slice(),
-            include_bytes!("../assets/music/RocketPower.mp3").as_slice(),
-            include_bytes!("../assets/music/SonOfARocket.mp3").as_slice(),
-            include_bytes!("../assets/music/HappyHappyGameShow.mp3").as_slice(),
-        ];
-        
-        for bytes in radio_files {
-            if let Ok(mut m) = audio.new_music_from_memory(".mp3", bytes) {
-                m.set_looping(true);
-                m.set_volume(0.3);
-                radio.push(m);
-            }
-        }
+        let (tx, rx) = channel();
 
-        // 8. Walk tracks (embedded)
-        let mut walk_tracks = Vec::new();
-        let walk_files = &[
-            include_bytes!("../assets/music/BassaIslandGameLoop.mp3").as_slice(),
-            include_bytes!("../assets/music/TownieLoop.mp3").as_slice(),
-        ];
-        for bytes in walk_files {
-            if let Ok(mut m) = audio.new_music_from_memory(".mp3", bytes) {
-                m.set_looping(true);
-                m.set_volume(0.3);
-                walk_tracks.push(m);
-            }
-        }
+        let walk_len = WALK_TRACKS.len();
+        let initial_idx = if walk_len > 0 { rand::random::<usize>() % walk_len } else { 0 };
 
-        // 9. Wanted chase tracks (embedded)
-        let mut wanted_tracks = Vec::new();
-        let wanted_files = &[
-            include_bytes!("../assets/music/ZombieChase.mp3").as_slice(),
-            include_bytes!("../assets/music/ChasePulse.mp3").as_slice(),
-        ];
-        for bytes in wanted_files {
-            if let Ok(mut m) = audio.new_music_from_memory(".mp3", bytes) {
-                m.set_looping(true);
-                m.set_volume(0.3);
-                wanted_tracks.push(m);
-            }
-        }
-
-        SoundEffects {
+        let mut sfx = SoundEffects {
             shoot,
             explosion,
             crash,
@@ -128,12 +196,25 @@ impl<'a> SoundEffects<'a> {
             sfx_volume: 0.7,
             music_volume: 0.3,
             
-            radio,
-            walk_tracks,
-            wanted_tracks,
+            audio_device: audio,
+            current_music: None,
+            current_bytes: None,
+            
+            rx_bytes: rx,
+            tx_bytes: tx,
+            is_loading: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            current_loading_url: None,
+            
             current_mode: SoundMode::Walk,
-            active_track_idx: 0,
-        }
+            active_track_idx: initial_idx,
+            music_paused: false,
+        };
+
+        // Start loading the initial track
+        let url = sfx.current_track_url().to_string();
+        sfx.start_loading_track(url);
+
+        sfx
     }
 
     pub fn update_engine(&mut self, in_vehicle: bool, speed: f32, throttle: f32) {
@@ -152,25 +233,40 @@ impl<'a> SoundEffects<'a> {
     }
 
     pub fn update_music(&mut self) {
-        match self.current_mode {
-            SoundMode::Walk => {
-                if !self.walk_tracks.is_empty() {
-                    let idx = self.active_track_idx % self.walk_tracks.len();
-                    self.walk_tracks[idx].update_stream();
+        // Poll for downloaded bytes
+        if let Ok(res) = self.rx_bytes.try_recv() {
+            self.is_loading.store(false, Ordering::Relaxed);
+            match res {
+                Ok((url, bytes)) => {
+                    if Some(url) == self.current_loading_url {
+                        self.current_bytes = Some(bytes);
+                        if let Some(ref b) = self.current_bytes {
+                            match self.audio_device.new_music_from_memory(".mp3", b) {
+                                Ok(mut m) => {
+                                    m.set_looping(true);
+                                    m.set_volume(self.music_volume * if self.current_mode == SoundMode::Wanted { 1.2 } else { 1.0 });
+                                    unsafe {
+                                        raylib::ffi::AttachAudioStreamProcessor(m.stream, Some(audio_processor_callback));
+                                    }
+                                    m.play_stream();
+                                    self.current_music = Some(m);
+                                }
+                                Err(e) => {
+                                    println!("Failed to load music from memory: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Download error: {}", e);
                 }
             }
-            SoundMode::Drive => {
-                if !self.radio.is_empty() {
-                    let idx = self.active_track_idx % self.radio.len();
-                    self.radio[idx].update_stream();
-                }
-            }
-            SoundMode::Wanted => {
-                if !self.wanted_tracks.is_empty() {
-                    let idx = self.active_track_idx % self.wanted_tracks.len();
-                    self.wanted_tracks[idx].update_stream();
-                }
-            }
+        }
+
+        if self.music_paused { return; }
+        if let Some(ref mut m) = self.current_music {
+            m.update_stream();
         }
     }
 
@@ -179,37 +275,18 @@ impl<'a> SoundEffects<'a> {
     }
 
     pub fn update_radio(&mut self) {
-        match self.current_mode {
-            SoundMode::Walk => {
-                if !self.walk_tracks.is_empty() {
-                    let idx = self.active_track_idx % self.walk_tracks.len();
-                    let m = &mut self.walk_tracks[idx];
-                    if !m.is_stream_playing() {
-                        m.play_stream();
-                    }
-                    m.set_volume(self.music_volume);
-                }
+        if self.music_paused {
+            return;
+        }
+        if self.current_music.is_none() && !self.is_loading.load(Ordering::Relaxed) {
+            let url = self.current_track_url().to_string();
+            self.start_loading_track(url);
+        }
+        if let Some(ref mut m) = self.current_music {
+            if !m.is_stream_playing() {
+                m.play_stream();
             }
-            SoundMode::Drive => {
-                if !self.radio.is_empty() {
-                    let idx = self.active_track_idx % self.radio.len();
-                    let m = &mut self.radio[idx];
-                    if !m.is_stream_playing() {
-                        m.play_stream();
-                    }
-                    m.set_volume(self.music_volume);
-                }
-            }
-            SoundMode::Wanted => {
-                if !self.wanted_tracks.is_empty() {
-                    let idx = self.active_track_idx % self.wanted_tracks.len();
-                    let m = &mut self.wanted_tracks[idx];
-                    if !m.is_stream_playing() {
-                        m.play_stream();
-                    }
-                    m.set_volume(self.music_volume * 1.2);
-                }
-            }
+            m.set_volume(self.music_volume * if self.current_mode == SoundMode::Wanted { 1.2 } else { 1.0 });
         }
     }
 
@@ -226,130 +303,140 @@ impl<'a> SoundEffects<'a> {
             self.stop_all_music();
             self.current_mode = target_mode;
             let count = match target_mode {
-                SoundMode::Walk => self.walk_tracks.len(),
-                SoundMode::Drive => self.radio.len(),
-                SoundMode::Wanted => self.wanted_tracks.len(),
+                SoundMode::Walk => WALK_TRACKS.len(),
+                SoundMode::Drive => RADIO_TRACKS.len(),
+                SoundMode::Wanted => WANTED_TRACKS.len(),
             };
             if count > 0 {
                 self.active_track_idx = rand::random::<usize>() % count;
             } else {
                 self.active_track_idx = 0;
             }
-            self.start_current_track();
+            if !self.music_paused {
+                let url = self.current_track_url().to_string();
+                self.start_loading_track(url);
+            }
         }
     }
 
     pub fn stop_all_music(&mut self) {
-        for m in &mut self.radio {
+        if let Some(ref mut m) = self.current_music {
             if m.is_stream_playing() {
                 m.stop_stream();
             }
         }
-        for m in &mut self.walk_tracks {
-            if m.is_stream_playing() {
-                m.stop_stream();
-            }
-        }
-        for m in &mut self.wanted_tracks {
-            if m.is_stream_playing() {
-                m.stop_stream();
-            }
-        }
+        self.current_music = None;
+        self.current_bytes = None;
+        self.current_loading_url = None;
+        self.is_loading.store(false, Ordering::Relaxed);
     }
 
     pub fn start_current_track(&mut self) {
-        match self.current_mode {
-            SoundMode::Walk => {
-                if !self.walk_tracks.is_empty() {
-                    let idx = self.active_track_idx % self.walk_tracks.len();
-                    self.walk_tracks[idx].set_volume(self.music_volume);
-                    self.walk_tracks[idx].play_stream();
-                }
-            }
-            SoundMode::Drive => {
-                if !self.radio.is_empty() {
-                    let idx = self.active_track_idx % self.radio.len();
-                    self.radio[idx].set_volume(self.music_volume);
-                    self.radio[idx].play_stream();
-                }
-            }
-            SoundMode::Wanted => {
-                if !self.wanted_tracks.is_empty() {
-                    let idx = self.active_track_idx % self.wanted_tracks.len();
-                    self.wanted_tracks[idx].set_volume(self.music_volume * 1.25);
-                    self.wanted_tracks[idx].play_stream();
-                }
-            }
+        if self.music_paused {
+            return;
+        }
+        if self.current_music.is_none() && !self.is_loading.load(Ordering::Relaxed) {
+            let url = self.current_track_url().to_string();
+            self.start_loading_track(url);
         }
     }
 
     pub fn cycle_track(&mut self, forward: bool) {
         self.stop_all_music();
-        match self.current_mode {
-            SoundMode::Walk => {
-                let len = self.walk_tracks.len();
-                if len > 0 {
-                    if forward {
-                        self.active_track_idx = (self.active_track_idx + 1) % len;
-                    } else {
-                        self.active_track_idx = (self.active_track_idx + len - 1) % len;
-                    }
-                }
-            }
-            SoundMode::Drive => {
-                let len = self.radio.len();
-                if len > 0 {
-                    if forward {
-                        self.active_track_idx = (self.active_track_idx + 1) % len;
-                    } else {
-                        self.active_track_idx = (self.active_track_idx + len - 1) % len;
-                    }
-                }
-            }
-            SoundMode::Wanted => {
-                let len = self.wanted_tracks.len();
-                if len > 0 {
-                    if forward {
-                        self.active_track_idx = (self.active_track_idx + 1) % len;
-                    } else {
-                        self.active_track_idx = (self.active_track_idx + len - 1) % len;
-                    }
-                }
+        let len = match self.current_mode {
+            SoundMode::Walk => WALK_TRACKS.len(),
+            SoundMode::Drive => RADIO_TRACKS.len(),
+            SoundMode::Wanted => WANTED_TRACKS.len(),
+        };
+        if len > 0 {
+            if forward {
+                self.active_track_idx = (self.active_track_idx + 1) % len;
+            } else {
+                self.active_track_idx = (self.active_track_idx + len - 1) % len;
             }
         }
-        self.start_current_track();
+        if !self.music_paused {
+            let url = self.current_track_url().to_string();
+            self.start_loading_track(url);
+        }
     }
 
     pub fn current_track_title(&self) -> &str {
         match self.current_mode {
             SoundMode::Walk => {
-                if self.walk_tracks.is_empty() { return "No Track"; }
-                match self.active_track_idx % self.walk_tracks.len() {
-                    0 => "Bassa Island Game Loop",
-                    _ => "Townie Loop",
-                }
+                if WALK_TRACKS.is_empty() { return "No Track"; }
+                let idx = self.active_track_idx % WALK_TRACKS.len();
+                WALK_TRACKS[idx].0
             }
             SoundMode::Drive => {
-                if self.radio.is_empty() { return "No Track"; }
-                match self.active_track_idx % self.radio.len() {
-                    0 => "Go Cart (Loop Mix)",
-                    1 => "Laser Groove",
-                    2 => "RetroFuture Clean",
-                    3 => "RetroFuture Dirty",
-                    4 => "Funk Game Loop",
-                    5 => "Space Fighter Loop",
-                    6 => "Loopster",
-                    7 => "Rocket Power",
-                    8 => "Son Of A Rocket",
-                    _ => "Happy Happy Game Show",
-                }
+                if RADIO_TRACKS.is_empty() { return "No Track"; }
+                let idx = self.active_track_idx % RADIO_TRACKS.len();
+                RADIO_TRACKS[idx].0
             }
             SoundMode::Wanted => {
-                if self.wanted_tracks.is_empty() { return "No Track"; }
-                match self.active_track_idx % self.wanted_tracks.len() {
-                    0 => "Zombie Chase",
-                    _ => "Chase Pulse",
+                if WANTED_TRACKS.is_empty() { return "No Track"; }
+                let idx = self.active_track_idx % WANTED_TRACKS.len();
+                WANTED_TRACKS[idx].0
+            }
+        }
+    }
+
+    pub fn current_track_url(&self) -> &str {
+        match self.current_mode {
+            SoundMode::Walk => {
+                if WALK_TRACKS.is_empty() { return ""; }
+                let idx = self.active_track_idx % WALK_TRACKS.len();
+                WALK_TRACKS[idx].1
+            }
+            SoundMode::Drive => {
+                if RADIO_TRACKS.is_empty() { return ""; }
+                let idx = self.active_track_idx % RADIO_TRACKS.len();
+                RADIO_TRACKS[idx].1
+            }
+            SoundMode::Wanted => {
+                if WANTED_TRACKS.is_empty() { return ""; }
+                let idx = self.active_track_idx % WANTED_TRACKS.len();
+                WANTED_TRACKS[idx].1
+            }
+        }
+    }
+
+    pub fn start_loading_track(&mut self, url: String) {
+        self.is_loading.store(true, Ordering::Relaxed);
+        self.current_loading_url = Some(url.clone());
+        let tx = self.tx_bytes.clone();
+        std::thread::spawn(move || {
+            let output = std::process::Command::new("curl")
+                .args(&["-s", "-L", &url])
+                .output();
+            match output {
+                Ok(out) if out.status.success() && out.stdout.len() > 10000 => {
+                    let _ = tx.send(Ok((url, out.stdout)));
                 }
+                Ok(out) => {
+                    let err = format!("Download failed: status={}, len={}", out.status, out.stdout.len());
+                    let _ = tx.send(Err(err));
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e.to_string()));
+                }
+            }
+        });
+    }
+
+    pub fn toggle_pause(&mut self) {
+        self.music_paused = !self.music_paused;
+        if self.music_paused {
+            if let Some(ref mut m) = self.current_music {
+                m.pause_stream();
+            }
+            CURRENT_AMPLITUDE.store(0.0f32.to_bits(), Ordering::Relaxed);
+        } else {
+            if let Some(ref mut m) = self.current_music {
+                m.resume_stream();
+            } else {
+                let url = self.current_track_url().to_string();
+                self.start_loading_track(url);
             }
         }
     }
@@ -365,6 +452,9 @@ impl<'a> SoundEffects<'a> {
 
     pub fn set_music_volume(&mut self, vol: f32) {
         self.music_volume = vol;
+        if let Some(ref mut m) = self.current_music {
+            m.set_volume(vol * if self.current_mode == SoundMode::Wanted { 1.2 } else { 1.0 });
+        }
     }
 }
 
@@ -498,4 +588,47 @@ fn gen_engine() -> Vec<i16> {
     }
     samples
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn test_audio_callback() {
+        // Initialize audio device - does not require a window
+        let audio = RaylibAudio::init_audio_device().unwrap();
+        let mut effects = SoundEffects::load(&audio);
+        effects.update_audio_mode(false, 0); // Walk mode
+        effects.update_radio(); // starts playing the current track
+        
+        let start_count = CALLBACK_COUNT.load(Ordering::Relaxed);
+        println!("Start callback count: {}", start_count);
+        
+        // Loop up to 10 seconds waiting for the music to download and load
+        let start = std::time::Instant::now();
+        while effects.current_music.is_none() && start.elapsed().as_secs() < 10 {
+            effects.update_music();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert!(effects.current_music.is_some(), "Music failed to download and load from URL!");
+        
+        // Now loop a bit to process data
+        for _ in 0..100 {
+            effects.update_music();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        
+        let end_count = CALLBACK_COUNT.load(Ordering::Relaxed);
+        println!("End callback count: {}", end_count);
+        
+        let amp_bits = CURRENT_AMPLITUDE.load(Ordering::Relaxed);
+        let amp = f32::from_bits(amp_bits);
+        println!("End amplitude: {}", amp);
+        
+        assert!(end_count > start_count, "Audio processor callback was not invoked!");
+    }
+}
+
 

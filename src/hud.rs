@@ -216,33 +216,69 @@ pub fn draw_hud(
     };
     d.draw_rectangle_lines(bar_x, music_y, music_w, music_h, music_border);
     
-    // Track title
+    // Track title (indicate if paused or loading)
     let title = sfx.current_track_title();
-    d.draw_text(title, bar_x + 8, music_y + 6, 13, Color::WHITE);
+    let display_title = if sfx.music_paused {
+        format!("{} [PAUSED]", title)
+    } else if sfx.is_loading.load(std::sync::atomic::Ordering::Relaxed) {
+        format!("{} [LOADING...]", title)
+    } else {
+        title.to_string()
+    };
+    // Draw title (truncate if too long for HUD widget)
+    let truncated_title = if display_title.len() > 18 {
+        format!("{}...", &display_title[..15])
+    } else {
+        display_title
+    };
+    d.draw_text(&truncated_title, bar_x + 8, music_y + 6, 13, Color::WHITE);
     
     // Controls nudge
-    d.draw_text("[ / ] Change track", bar_x + 8, music_y + 24, 11, Color::new(160, 160, 180, 200));
+    let nudge = if sfx.music_paused {
+        "[P] Play  | [ / ] Cycle"
+    } else {
+        "[P] Pause | [ / ] Cycle"
+    };
+    d.draw_text(nudge, bar_x + 8, music_y + 24, 11, Color::new(160, 160, 180, 200));
     
+    // Read actual volume amplitude from the atomic variables
+    let music_volume = sfx.music_volume.max(0.01);
+    // Dynamic gains per band to match visual scaling:
+    // Low bands are stronger, high bands are weaker so we boost high bands more.
+    let gains = [6.0, 7.5, 9.0, 11.0, 16.0, 22.0];
+
     // Visualizer (6 bars)
     let vis_x = bar_x + music_w - 55;
     let vis_y = music_y + 8;
     for i in 0..6 {
-        let speed_multiplier = match sfx.current_mode {
-            crate::sound::SoundMode::Wanted => 2.5,
-            crate::sound::SoundMode::Drive => 1.8,
-            crate::sound::SoundMode::Walk => 1.0,
+        let amp_bits = crate::sound::BAR_AMPLITUDES[i].load(std::sync::atomic::Ordering::Relaxed);
+        let raw_amp = f32::from_bits(amp_bits);
+        let normalized_amp = raw_amp / music_volume;
+        
+        let amplitude_scale = if sfx.music_paused { 
+            0.0 
+        } else { 
+            (normalized_amp * gains[i]).clamp(0.0, 1.2) 
         };
-        // Add a bit of pseudo-noise/phase shift per bar
+        
+        // Add a small idle oscillation so the bars have a tiny bit of life even during quiet moments
         let phase = i as f32 * 1.2 + (i as f32 * 2.3).cos() * 0.5;
-        let wave = (time * 7.0 * speed_multiplier + phase).sin().abs();
-        let bar_h = 3 + (wave * 18.0) as i32;
+        let idle_wave = if sfx.music_paused || sfx.is_loading.load(std::sync::atomic::Ordering::Relaxed) {
+            0.0
+        } else {
+            (time * 4.0 + phase).sin().abs() * 0.06
+        };
+        
+        let final_scale = (amplitude_scale + idle_wave).clamp(0.0, 1.2);
+        let bar_h = 3 + (final_scale * 18.0) as i32;
+        
         let bar_color = match sfx.current_mode {
             crate::sound::SoundMode::Wanted => Color::new(220, 40, 40, 230),
             crate::sound::SoundMode::Drive => Color::new(0, 220, 255, 230),
             crate::sound::SoundMode::Walk => Color::new(60, 220, 80, 230),
         };
         d.draw_rectangle(
-            vis_x + i * 8,
+            vis_x + i as i32 * 8,
             vis_y + (22 - bar_h),
             5,
             bar_h,

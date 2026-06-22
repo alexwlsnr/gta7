@@ -1863,5 +1863,8 @@ impl<'a> Game<'a> {
         if rl.is_key_pressed(KeyboardKey::KEY_RIGHT_BRACKET) {
             self.sfx.cycle_track(true);
         }
+        if rl.is_key_pressed(KeyboardKey::KEY_P) {
+            self.sfx.toggle_pause();
+        }
     }
 }
