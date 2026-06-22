@@ -694,7 +694,7 @@ pub fn quat_to_axis_angle(q: Quat) -> (Vector3, f32) {
     if sin_half < 1e-6 {
         (Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 0.0)
     } else {
-        let angle = 2.0 * w.acos().to_degrees();
+        let angle = 2.0 * w.clamp(-1.0, 1.0).acos().to_degrees();
         let axis = Vector3 {
             x: x / sin_half,
             y: y / sin_half,

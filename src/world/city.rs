@@ -283,11 +283,22 @@ impl City {
         // 2. Check buildings (roofs)
         let mut highest_roof = 0.0;
         for b in &self.buildings {
+            // Broad phase: skip buildings whose roof is well below the entity
+            // (can't stand on it) or that are far away in XZ.
+            let roof_y = b.box3d.max.y;
+            if pos.y < roof_y - 0.5 {
+                continue;
+            }
+            let dx = (b.box3d.center().x - pos.x).abs();
+            let dz = (b.box3d.center().z - pos.z).abs();
+            let h = b.box3d.half();
+            if dx > h.x + 2.0 || dz > h.z + 2.0 {
+                continue;
+            }
             if pos.x >= b.box3d.min.x && pos.x <= b.box3d.max.x
                && pos.z >= b.box3d.min.z && pos.z <= b.box3d.max.z {
-                let roof_y = b.box3d.max.y;
-                // If entity is above or close to the roof, they can stand on it
-                if pos.y >= roof_y - 0.5 && roof_y > highest_roof {
+                // Entity is above or near this roof (guaranteed by broad phase).
+                if roof_y > highest_roof {
                     highest_roof = roof_y;
                 }
             }
