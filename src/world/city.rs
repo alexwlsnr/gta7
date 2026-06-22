@@ -6,6 +6,9 @@ use rand_chacha::ChaCha8Rng;
 use rand::{Rng, SeedableRng};
 use raylib::ffi::Vector3;
 
+use crate::pickup::{Pickup, Shop, ShopKind};
+use crate::player::Weapon;
+
 /// A building is a collidable box plus visual params.
 #[derive(Clone, Debug)]
 pub struct Building {
@@ -52,149 +55,216 @@ pub struct City {
     pub road_width: f32,
     pub sidewalk_width: f32,
     pub buildings: Vec<Building>,
-    /// Flattened grid: which lots are parks.
-    pub parks: Vec<bool>,
+    /// Set of block coordinates (bi, bj) that are parks.
+    pub parks: std::collections::HashSet<(i32, i32)>,
     pub lanes: Vec<Lane>,
     pub lights: Vec<TrafficLight>,
     pub ramps: Vec<Ramp>,
+    pub generated_blocks: std::collections::HashSet<(i32, i32)>,
     pub ground_half: f32,
 }
 
+/// Helper function to create a deterministic RNG for a given seed and block coordinate.
+fn get_block_rng(seed: u64, bi: i32, bj: i32) -> ChaCha8Rng {
+    let mut h = seed;
+    h = h.wrapping_add(bi as u64).wrapping_mul(0xbf58476d1ce4e5b9);
+    h = h ^ (h >> 30);
+    h = h.wrapping_add(bj as u64).wrapping_mul(0x94d049bb133111eb);
+    h = h ^ (h >> 27);
+    h = h.wrapping_add(0x9e3779b97f4a7c15);
+    ChaCha8Rng::seed_from_u64(h)
+}
+
 impl City {
-    pub fn generate(cfg: &Config) -> Self {
-        let mut rng = ChaCha8Rng::seed_from_u64(cfg.seed);
-        let n = cfg.city_blocks;
-        let bs = cfg.block_size;
-        let rw = cfg.road_width;
-        let origin = -(bs * n as f32) * 0.5;
+    pub fn get_block_coords(&self, x: f32, z: f32) -> (i32, i32) {
+        let origin = -self.ground_half;
+        let bi = ((x - origin) / self.block_size).floor() as i32;
+        let bj = ((z - origin) / self.block_size).floor() as i32;
+        (bi, bj)
+    }
+
+    pub fn ensure_blocks_around(
+        &mut self,
+        pos: Vector3,
+        radius: i32,
+        cfg: &Config,
+        shops: &mut Vec<Shop>,
+        pickups: &mut Vec<Pickup>,
+    ) {
+        let (pi, pj) = self.get_block_coords(pos.x, pos.z);
+        for i in (pi - radius)..=(pi + radius) {
+            for j in (pj - radius)..=(pj + radius) {
+                self.ensure_block_generated(i, j, cfg, shops, pickups);
+            }
+        }
+    }
+
+    pub fn ensure_block_generated(
+        &mut self,
+        bi: i32,
+        bj: i32,
+        cfg: &Config,
+        shops: &mut Vec<Shop>,
+        pickups: &mut Vec<Pickup>,
+    ) {
+        if !self.generated_blocks.insert((bi, bj)) {
+            return;
+        }
+
+        let mut rng = get_block_rng(cfg.seed, bi, bj);
+        let bs = self.block_size;
+        let origin = -self.ground_half;
         let lot_half = cfg.lot_half();
 
-        let mut buildings = Vec::new();
-        let mut parks = vec![false; n * n];
+        let block_center_x = origin + (bi as f32 + 0.5) * bs;
+        let block_center_z = origin + (bj as f32 + 0.5) * bs;
 
-        for bi in 0..n {
-            for bj in 0..n {
-                let block_center_x = origin + (bi as f32 + 0.5) * bs;
-                let block_center_z = origin + (bj as f32 + 0.5) * bs;
-                // Subdivide block into up to 4 lots.
-                let subdivisions = rng.gen_range(1..=4);
-                let (sx, sz) = match subdivisions {
-                    1 => (1, 1),
-                    2 => if rng.gen_bool(0.5) { (2, 1) } else { (1, 2) },
-                    _ => (2, 2),
-                };
-                let lot_w = (lot_half * 2.0) / sx as f32;
-                let lot_d = (lot_half * 2.0) / sz as f32;
-                for si in 0..sx {
-                    for sj in 0..sz {
-                        let lot_cx = block_center_x - lot_half + (si as f32 + 0.5) * lot_w;
-                        let lot_cz = block_center_z - lot_half + (sj as f32 + 0.5) * lot_d;
-                        // Park chance
-                        if rng.gen_bool(0.12) {
-                            parks[bi * n + bj] = true;
-                            continue;
+        // Deciding if it is a park (12% chance)
+        let is_park = rng.gen_bool(0.12);
+        if is_park {
+            self.parks.insert((bi, bj));
+            // Let's spawn unique decorations or pickups in the park!
+        } else {
+            // Subdivide block into up to 4 lots.
+            let subdivisions = rng.gen_range(1..=4);
+            let (sx, sz) = match subdivisions {
+                1 => (1, 1),
+                2 => if rng.gen_bool(0.5) { (2, 1) } else { (1, 2) },
+                _ => (2, 2),
+            };
+            let lot_w = (lot_half * 2.0) / sx as f32;
+            let lot_d = (lot_half * 2.0) / sz as f32;
+            for si in 0..sx {
+                for sj in 0..sz {
+                    let lot_cx = block_center_x - lot_half + (si as f32 + 0.5) * lot_w;
+                    let lot_cz = block_center_z - lot_half + (sj as f32 + 0.5) * lot_d;
+
+                    // Empty lot chance: 15% (allows spawning shops, pickups)
+                    if rng.gen_bool(0.15) {
+                        let feature_roll = rng.gen_range(0..10);
+                        let pos = Vector3 { x: lot_cx, y: 0.0, z: lot_cz };
+                        if feature_roll < 3 {
+                            // Spawn armor, weapon, health or ammo shops
+                            let kind = match rng.gen_range(0..4) {
+                                0 => ShopKind::Weapon,
+                                1 => ShopKind::Health,
+                                2 => ShopKind::Armor,
+                                _ => ShopKind::Ammo,
+                            };
+                            shops.push(Shop::new(pos, kind));
+                        } else if feature_roll < 6 {
+                            // Spawn interesting collectibles
+                            let kind = rng.gen_range(0..4);
+                            match kind {
+                                0 => pickups.push(Pickup::health(pos)),
+                                1 => pickups.push(Pickup::armor(pos)),
+                                2 => pickups.push(Pickup::money(pos, rng.gen_range(150..600))),
+                                _ => pickups.push(Pickup::weapon(pos, if rng.gen_bool(0.5) { Weapon::Smg } else { Weapon::Pistol })),
+                            }
                         }
-                        // Empty lot chance
-                        if rng.gen_bool(0.08) {
-                            continue;
-                        }
-                        // Building footprint inset within the lot.
-                        let inset = rng.gen_range(0.5..1.5);
-                        let hx = (lot_w * 0.5) - inset;
-                        let hz = (lot_d * 0.5) - inset;
-                        if hx < 1.0 || hz < 1.0 { continue; }
-                        let floors = rng.gen_range(2..=14);
-                        let height = floors as f32 * 3.2;
-                        let cy = height * 0.5;
-                        let color_index = rng.gen_range(0..360);
-                        buildings.push(Building {
-                            box3d: AABB::from_center(lot_cx, cy, lot_cz, hx, height * 0.5, hz),
-                            color_index,
-                            floors,
-                            has_windows: rng.gen_bool(0.8),
-                        });
+                        continue;
                     }
-                }
-            }
-        }
 
-        // Lane graph: directed lanes along each road between intersections.
-        // Intersections are at (bi*bs, bj*bs) + origin, for bi,bj in 0..=n.
-        let mut lanes = Vec::new();
-        for bi in 0..=n {
-            for bj in 0..=n {
-                // Horizontal lanes (along X)
-                if bi < n {
-                    // forward (+X) at +Z offset of road
-                    lanes.push(Lane { from: (bi as i32, bj as i32), to: ((bi+1) as i32, bj as i32), axis: Axis::X, dir: 1 });
-                    lanes.push(Lane { from: ((bi+1) as i32, bj as i32), to: (bi as i32, bj as i32), axis: Axis::X, dir: -1 });
-                }
-                // Vertical lanes (along Z)
-                if bj < n {
-                    lanes.push(Lane { from: (bi as i32, bj as i32), to: (bi as i32, (bj+1) as i32), axis: Axis::Z, dir: 1 });
-                    lanes.push(Lane { from: (bi as i32, (bj+1) as i32), to: (bi as i32, bj as i32), axis: Axis::Z, dir: -1 });
-                }
-            }
-        }
-
-        // Traffic lights at internal intersections (not on border).
-        let mut lights = Vec::new();
-        for bi in 1..n {
-            for bj in 1..n {
-                let x = origin + bi as f32 * bs;
-                let z = origin + bj as f32 * bs;
-                let state = if rng.gen_bool(0.5) { LightState::Red } else { LightState::Green };
-                lights.push(TrafficLight {
-                    pos: Vector3 { x, y: 4.5, z },
-                    state,
-                    timer: rng.gen_range(0.0..8.0),
-                });
-            }
-        }
-
-        // Generate ramps on horizontal/vertical lanes (midpoints of blocks).
-        let mut ramps = Vec::new();
-        let mut lane_counter = 0;
-        for lane in &lanes {
-            let from_i = lane.from.0;
-            let from_j = lane.from.1;
-            let to_i = lane.to.0;
-            let to_j = lane.to.1;
-            
-            // Place on internal lanes only so we don't jump off map boundaries
-            if from_i > 0 && from_i < n as i32 && from_j > 0 && from_j < n as i32
-               && to_i > 0 && to_i < n as i32 && to_j > 0 && to_j < n as i32 {
-                lane_counter += 1;
-                // Place a ramp on every 7th internal lane
-                if lane_counter % 7 == 0 {
-                    let from_pos = Vector3 { x: origin + from_i as f32 * bs, y: 0.0, z: origin + from_j as f32 * bs };
-                    let to_pos = Vector3 { x: origin + to_i as f32 * bs, y: 0.0, z: origin + to_j as f32 * bs };
-                    let mid = vscale(vadd(from_pos, to_pos), 0.5);
-                    let dir = vnorm_xz(vsub(to_pos, from_pos));
-                    let yaw = yaw_from_dir(dir);
-                    ramps.push(Ramp {
-                        pos: mid,
-                        yaw,
-                        width: 5.5,
-                        length: 12.0,
-                        height: 3.5,
+                    // Otherwise, spawn building
+                    let inset = rng.gen_range(0.5..1.5);
+                    let hx = (lot_w * 0.5) - inset;
+                    let hz = (lot_d * 0.5) - inset;
+                    if hx < 1.0 || hz < 1.0 { continue; }
+                    let floors = rng.gen_range(2..=14);
+                    let height = floors as f32 * 3.2;
+                    let cy = height * 0.5;
+                    let color_index = rng.gen_range(0..360);
+                    self.buildings.push(Building {
+                        box3d: AABB::from_center(lot_cx, cy, lot_cz, hx, height * 0.5, hz),
+                        color_index,
+                        floors,
+                        has_windows: rng.gen_bool(0.8),
                     });
                 }
             }
         }
 
-        City {
+        // Lanes associated with the corner intersection (bi, bj)
+        self.lanes.push(Lane { from: (bi, bj), to: (bi + 1, bj), axis: Axis::X, dir: 1 });
+        self.lanes.push(Lane { from: (bi + 1, bj), to: (bi, bj), axis: Axis::X, dir: -1 });
+        self.lanes.push(Lane { from: (bi, bj), to: (bi, bj + 1), axis: Axis::Z, dir: 1 });
+        self.lanes.push(Lane { from: (bi, bj + 1), to: (bi, bj), axis: Axis::Z, dir: -1 });
+
+        // Traffic lights at intersections
+        if rng.gen_bool(0.4) {
+            let x = origin + bi as f32 * bs;
+            let z = origin + bj as f32 * bs;
+            let state = if rng.gen_bool(0.5) { LightState::Red } else { LightState::Green };
+            self.lights.push(TrafficLight {
+                pos: Vector3 { x, y: 4.5, z },
+                state,
+                timer: rng.gen_range(0.0..8.0),
+            });
+        }
+
+        // Ramps on lane segments
+        // Midpoint of X lane
+        if rng.gen_bool(0.08) {
+            let from_pos = Vector3 { x: origin + bi as f32 * bs, y: 0.0, z: origin + bj as f32 * bs };
+            let to_pos = Vector3 { x: origin + (bi + 1) as f32 * bs, y: 0.0, z: origin + bj as f32 * bs };
+            let mid = vscale(vadd(from_pos, to_pos), 0.5);
+            let dir = vnorm_xz(vsub(to_pos, from_pos));
+            let yaw = yaw_from_dir(dir);
+            self.ramps.push(Ramp {
+                pos: mid,
+                yaw,
+                width: 5.5,
+                length: 12.0,
+                height: 3.5,
+            });
+        }
+        // Midpoint of Z lane
+        if rng.gen_bool(0.08) {
+            let from_pos = Vector3 { x: origin + bi as f32 * bs, y: 0.0, z: origin + bj as f32 * bs };
+            let to_pos = Vector3 { x: origin + bi as f32 * bs, y: 0.0, z: origin + (bj + 1) as f32 * bs };
+            let mid = vscale(vadd(from_pos, to_pos), 0.5);
+            let dir = vnorm_xz(vsub(to_pos, from_pos));
+            let yaw = yaw_from_dir(dir);
+            self.ramps.push(Ramp {
+                pos: mid,
+                yaw,
+                width: 5.5,
+                length: 12.0,
+                height: 3.5,
+            });
+        }
+    }
+
+    pub fn generate(cfg: &Config) -> Self {
+        let n = cfg.city_blocks;
+        let bs = cfg.block_size;
+        let rw = cfg.road_width;
+        let ground_half = bs * n as f32 * 0.5;
+
+        let mut city = City {
             blocks: n,
             block_size: bs,
             road_width: rw,
             sidewalk_width: cfg.sidewalk_width,
-            buildings,
-            parks,
-            lanes,
-            lights,
-            ramps,
-            ground_half: bs * n as f32 * 0.5,
+            buildings: Vec::new(),
+            parks: std::collections::HashSet::new(),
+            lanes: Vec::new(),
+            lights: Vec::new(),
+            ramps: Vec::new(),
+            generated_blocks: std::collections::HashSet::new(),
+            ground_half,
+        };
+
+        // For backward compatibility and initial setup, generate the n x n block grid.
+        let mut dummy_shops = Vec::new();
+        let mut dummy_pickups = Vec::new();
+        for bi in 0..n {
+            for bj in 0..n {
+                city.ensure_block_generated(bi as i32, bj as i32, cfg, &mut dummy_shops, &mut dummy_pickups);
+            }
         }
+
+        city
     }
 
     /// World position of an intersection (grid coords i,j in 0..=n).
@@ -204,6 +274,22 @@ impl City {
             x: origin + i as f32 * self.block_size,
             y: 0.0,
             z: origin + j as f32 * self.block_size,
+        }
+    }
+
+    pub fn get_random_lane_near(&self, player_pos: Vector3, min_dist: f32, max_dist: f32) -> Option<usize> {
+        let mut candidates = Vec::new();
+        for (idx, lane) in self.lanes.iter().enumerate() {
+            let from_pos = self.intersection(lane.from.0, lane.from.1);
+            let dist = vdist_xz(from_pos, player_pos);
+            if dist >= min_dist && dist <= max_dist {
+                candidates.push(idx);
+            }
+        }
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(candidates[rand::random::<usize>() % candidates.len()])
         }
     }
 

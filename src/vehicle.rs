@@ -92,7 +92,7 @@ impl Vehicle {
     }
 
     /// Player-driven update.
-    pub fn update_driven(&mut self, input: &Input, city: &City, cfg: &Config, dt: f32) -> bool {
+    pub fn update_driven(&mut self, input: &Input, city: &City, _cfg: &Config, dt: f32) -> bool {
         self.just_landed_stunt = None;
         if self.destroyed {
             return false;
@@ -215,11 +215,6 @@ impl Vehicle {
         // 6. Integrate position
         self.pos = vadd(self.pos, vscale(self.vel, dt));
 
-        // Limit position to world bounds
-        let lim = cfg.world_half() - 3.0;
-        self.pos.x = clamp(self.pos.x, -lim, lim);
-        self.pos.z = clamp(self.pos.z, -lim, lim);
-
         // Check landing transition
         let next_ground_h = city.get_ground_height(self.pos);
         if self.pos.y < next_ground_h {
@@ -260,7 +255,7 @@ impl Vehicle {
         crashed
     }
 
-    pub fn update_ai(&mut self, target_speed: f32, target_yaw: f32, city: &City, cfg: &Config, dt: f32) {
+    pub fn update_ai(&mut self, target_speed: f32, target_yaw: f32, city: &City, _cfg: &Config, dt: f32) {
         if self.destroyed {
             return;
         }
@@ -271,9 +266,6 @@ impl Vehicle {
         self.pos = vadd(self.pos, vscale(self.vel, dt));
         // Keep traffic on road or ramp height
         self.pos.y = city.get_ground_height(self.pos);
-        let lim = cfg.world_half() - 3.0;
-        self.pos.x = clamp(self.pos.x, -lim, lim);
-        self.pos.z = clamp(self.pos.z, -lim, lim);
         let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 1.5);
         self.pos.x += push.x;
         self.pos.z += push.z;

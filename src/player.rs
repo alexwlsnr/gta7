@@ -147,7 +147,7 @@ impl Player {
     }
 
     /// On-foot update. Returns events (fire request) via mutable fields.
-    pub fn update_on_foot(&mut self, input: &Input, city: &City, cfg: &Config, dt: f32) {
+    pub fn update_on_foot(&mut self, input: &Input, city: &City, _cfg: &Config, dt: f32) {
         // Yaw is controlled by the camera (set externally via set_yaw).
         // Recoil recovery
         self.recoil = (self.recoil - dt * 4.0).max(0.0);
@@ -184,10 +184,6 @@ impl Player {
             self.vel.y = 0.0;
             self.on_ground = true;
         }
-        // World bounds
-        let lim = cfg.world_half() - 2.0;
-        self.pos.x = clamp(self.pos.x, -lim, lim);
-        self.pos.z = clamp(self.pos.z, -lim, lim);
         // Building collision (radius 0.5) in 3D
         let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 0.5);
         self.pos.x += push.x;

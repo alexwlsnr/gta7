@@ -318,29 +318,34 @@ fn draw_minimap(
     let cy = my + size / 2;
 
     // Draw roads as lines along grid
-    let n = city.blocks;
     let bs = city.block_size;
     let origin = -city.ground_half;
     let road_col = Color::new(80, 80, 90, 255);
 
-    for i in 0..=n {
-        let line = origin + i as f32 * bs;
-        // World->minimap: relative to cam, rotated by -cam_yaw, scaled
-        let rel = line - cam_pos.z;
+    // Calculate how far roads can be visible on the minimap
+    let half_view_range = (size as f32 / scale) * 0.5 + bs;
+    let start_i = (((cam_pos.x - half_view_range) - origin) / bs).floor() as i32;
+    let end_i = (((cam_pos.x + half_view_range) - origin) / bs).ceil() as i32;
+    let start_j = (((cam_pos.z - half_view_range) - origin) / bs).floor() as i32;
+    let end_j = (((cam_pos.z + half_view_range) - origin) / bs).ceil() as i32;
+
+    // Horizontal road lines (at constant Z)
+    for j in start_j..=end_j {
+        let line_z = origin + j as f32 * bs;
+        let rel = line_z - cam_pos.z;
         let screen_rel = rel * scale;
-        if screen_rel.abs() > size as f32 / 2.0 + 10.0 {
-            continue;
+        if screen_rel.abs() <= size as f32 / 2.0 + 10.0 {
+            d.draw_line(mx, cy + screen_rel as i32, mx + size, cy + screen_rel as i32, road_col);
         }
-        d.draw_line(mx, cy + screen_rel as i32, mx + size, cy + screen_rel as i32, road_col);
     }
-    for i in 0..=n {
-        let line = origin + i as f32 * bs;
-        let rel = line - cam_pos.x;
+    // Vertical road lines (at constant X)
+    for i in start_i..=end_i {
+        let line_x = origin + i as f32 * bs;
+        let rel = line_x - cam_pos.x;
         let screen_rel = rel * scale;
-        if screen_rel.abs() > size as f32 / 2.0 + 10.0 {
-            continue;
+        if screen_rel.abs() <= size as f32 / 2.0 + 10.0 {
+            d.draw_line(cx + screen_rel as i32, my, cx + screen_rel as i32, my + size, road_col);
         }
-        d.draw_line(cx + screen_rel as i32, my, cx + screen_rel as i32, my + size, road_col);
     }
 
     // Vehicle blips (yellow)

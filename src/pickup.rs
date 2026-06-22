@@ -88,6 +88,8 @@ pub struct Shop {
 pub enum ShopKind {
     Weapon,
     Health,
+    Armor,
+    Ammo,
 }
 
 impl Shop {
@@ -115,10 +117,25 @@ impl Shop {
                 if player.money >= 100 {
                     player.money -= 100;
                     player.heal(100.0);
-                    player.add_armor(50.0);
-                    return Some("Healed + Armored!");
+                    return Some("Healed!");
                 }
-                Some("Need $100 for health+armor")
+                Some("Need $100 for health")
+            }
+            ShopKind::Armor => {
+                if player.money >= 80 {
+                    player.money -= 80;
+                    player.add_armor(100.0);
+                    return Some("Bought Kevlar Armor!");
+                }
+                Some("Need $80 for Armor")
+            }
+            ShopKind::Ammo => {
+                if player.money >= 50 {
+                    player.money -= 50;
+                    player.reserve += player.weapon.mag_size() * 4;
+                    return Some("Bought Ammo!");
+                }
+                Some("Need $50 for Ammo")
             }
         }
     }
@@ -127,6 +144,8 @@ impl Shop {
         match self.kind {
             ShopKind::Weapon => "Weapon Shop ($300)",
             ShopKind::Health => "Health Shop ($100)",
+            ShopKind::Armor => "Armor Shop ($80)",
+            ShopKind::Ammo => "Ammo Shop ($50)",
         }
     }
 }

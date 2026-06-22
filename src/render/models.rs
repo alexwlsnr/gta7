@@ -171,67 +171,81 @@ impl Assets {
 
 /// Draw the ground plane + roads + sidewalks + parks + streetlights.
 pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg: &Config, hour: f32, cam_pos: Vector3) {
-    let half = city.ground_half;
     let p = cfg.palette();
+    let bs = city.block_size;
+    let rw = city.road_width;
+    let origin = -city.ground_half;
 
-    // Textured ground plane.
+    // Textured ground plane, snapped to block size to avoid texture sliding.
+    let snap_x = (cam_pos.x / bs).round() * bs;
+    let snap_z = (cam_pos.z / bs).round() * bs;
     d3.draw_model(
         &assets.ground_model,
-        Vector3 { x: 0.0, y: 0.0, z: 0.0 },
+        Vector3 { x: snap_x, y: 0.0, z: snap_z },
         1.0,
         Color::WHITE,
     );
 
-    let n = city.blocks;
-    let bs = city.block_size;
-    let rw = city.road_width;
-    let origin = -half;
+    // Determine the block range around the camera (render radius of 5 blocks).
+    let radius = 5;
+    let (cam_bi, cam_bj) = city.get_block_coords(cam_pos.x, cam_pos.z);
 
     // Roads: colored strips along grid lines.
     let road_col = p.road();
-    for i in 0..=n {
-        let line = origin + i as f32 * bs;
-        d3.draw_plane(
-            Vector3 { x: 0.0, y: 0.03, z: line },
-            Vector2::new(half * 2.0, rw),
-            road_col,
-        );
-        d3.draw_plane(
-            Vector3 { x: line, y: 0.03, z: 0.0 },
-            Vector2::new(rw, half * 2.0),
-            road_col,
-        );
+    for i in (cam_bi - radius)..=(cam_bi + radius) {
+        for j in (cam_bj - radius)..=(cam_bj + radius) {
+            // Horizontal road segment for cell (i, j) along X, from i to i+1 at z = j
+            let line_z = origin + j as f32 * bs;
+            let center_x = origin + (i as f32 + 0.5) * bs;
+            d3.draw_plane(
+                Vector3 { x: center_x, y: 0.03, z: line_z },
+                Vector2::new(bs, rw),
+                road_col,
+            );
+
+            // Vertical road segment for cell (i, j) along Z, from j to j+1 at x = i
+            let line_x = origin + i as f32 * bs;
+            let center_z = origin + (j as f32 + 0.5) * bs;
+            d3.draw_plane(
+                Vector3 { x: line_x, y: 0.03, z: center_z },
+                Vector2::new(rw, bs),
+                road_col,
+            );
+        }
     }
 
     // Sidewalks: strips parallel to roads, offset on each side.
     let sw = cfg.sidewalk_width;
     let sw_off = cfg.sidewalk_offset();
     let sw_col = p.sidewalk();
-    for i in 0..=n {
-        let line = origin + i as f32 * bs;
-        // Horizontal roads (along X): sidewalks at z = line ± sw_off
-        d3.draw_plane(
-            Vector3 { x: 0.0, y: 0.02, z: line - sw_off },
-            Vector2::new(half * 2.0, sw),
-            sw_col,
-        );
-        d3.draw_plane(
-            Vector3 { x: 0.0, y: 0.02, z: line + sw_off },
-            Vector2::new(half * 2.0, sw),
-            sw_col,
-        );
+    for i in (cam_bi - radius)..=(cam_bi + radius) {
+        for j in (cam_bj - radius)..=(cam_bj + radius) {
+            let line_z = origin + j as f32 * bs;
+            let center_x = origin + (i as f32 + 0.5) * bs;
+            d3.draw_plane(
+                Vector3 { x: center_x, y: 0.02, z: line_z - sw_off },
+                Vector2::new(bs, sw),
+                sw_col,
+            );
+            d3.draw_plane(
+                Vector3 { x: center_x, y: 0.02, z: line_z + sw_off },
+                Vector2::new(bs, sw),
+                sw_col,
+            );
 
-        // Vertical roads (along Z): sidewalks at x = line ± sw_off
-        d3.draw_plane(
-            Vector3 { x: line - sw_off, y: 0.02, z: 0.0 },
-            Vector2::new(sw, half * 2.0),
-            sw_col,
-        );
-        d3.draw_plane(
-            Vector3 { x: line + sw_off, y: 0.02, z: 0.0 },
-            Vector2::new(sw, half * 2.0),
-            sw_col,
-        );
+            let line_x = origin + i as f32 * bs;
+            let center_z = origin + (j as f32 + 0.5) * bs;
+            d3.draw_plane(
+                Vector3 { x: line_x - sw_off, y: 0.02, z: center_z },
+                Vector2::new(sw, bs),
+                sw_col,
+            );
+            d3.draw_plane(
+                Vector3 { x: line_x + sw_off, y: 0.02, z: center_z },
+                Vector2::new(sw, bs),
+                sw_col,
+            );
+        }
     }
 
     // Lane center dashes (yellow).
@@ -245,17 +259,21 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
             y: 0.05,
             z: (a.z + b.z) * 0.5 + cz,
         };
+        // Distance cull lane dashes.
+        if (mid.x - cam_pos.x).abs() > 180.0 || (mid.z - cam_pos.z).abs() > 180.0 {
+            continue;
+        }
         d3.draw_plane(mid, Vector2::new(2.0, 0.3), yellow);
     }
 
-    // Parks: grass planes + trees.
-    for bi in 0..n {
-        for bj in 0..n {
-            if !city.parks[bi * n + bj] {
+    // Parks: grass planes + trees + fountains/statues.
+    for i in (cam_bi - radius)..=(cam_bi + radius) {
+        for j in (cam_bj - radius)..=(cam_bj + radius) {
+            if !city.parks.contains(&(i, j)) {
                 continue;
             }
-            let cx = origin + (bi as f32 + 0.5) * bs;
-            let cz = origin + (bj as f32 + 0.5) * bs;
+            let cx = origin + (i as f32 + 0.5) * bs;
+            let cz = origin + (j as f32 + 0.5) * bs;
             let lh = cfg.lot_half();
             d3.draw_plane(
                 Vector3 { x: cx, y: 0.04, z: cz },
@@ -276,11 +294,34 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
                     Color::new(40, 120, 50, 255),
                 );
             }
+            // Pond
+            d3.draw_plane(
+                Vector3 { x: cx, y: 0.045, z: cz - 2.0 },
+                Vector2::new(6.0, 6.0),
+                Color::new(50, 150, 220, 255),
+            );
+            // Statue
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                Vector3 { x: cx, y: 1.0, z: cz - 2.0 },
+                Vector3 { x: 0.0, y: 1.0, z: 0.0 }, 45.0,
+                Vector3 { x: 1.0, y: 2.0, z: 1.0 },
+                Color::new(140, 140, 145, 255),
+            );
+            d3.draw_sphere(
+                Vector3 { x: cx, y: 2.5, z: cz - 2.0 },
+                0.8,
+                Color::new(200, 190, 180, 255),
+            );
         }
     }
 
     // Ramps (bright orange wedges).
     for r in &city.ramps {
+        // Distance cull ramps
+        if (r.pos.x - cam_pos.x).abs() > 180.0 || (r.pos.z - cam_pos.z).abs() > 180.0 {
+            continue;
+        }
         let slope = (r.height / r.length).atan();
         let hypot = (r.height * r.height + r.length * r.length).sqrt();
         
@@ -352,18 +393,15 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
     let bulb_color = if is_night { Color::new(255, 255, 180, 255) } else { Color::new(180, 180, 180, 255) };
     let sw_offset = rw * 0.5 + sw * 0.5;
 
-    for i in 0..=n {
-        let cx = origin + i as f32 * bs;
-        if (cx - cam_pos.x).abs() > 80.0 {
-            continue;
-        }
-        for j in 0..=n {
+    for i in (cam_bi - radius)..=(cam_bi + radius) {
+        for j in (cam_bj - radius)..=(cam_bj + radius) {
+            let cx = origin + i as f32 * bs;
             let cz = origin + j as f32 * bs;
-            if (cz - cam_pos.z).abs() > 80.0 {
+            if (cx - cam_pos.x).abs() > 80.0 || (cz - cam_pos.z).abs() > 80.0 {
                 continue;
             }
             
-            // Render 2 diagonal corner streetlights per intersection (optimized density)
+            // Render 2 diagonal corner streetlights per intersection
             let offsets = [
                 (-sw_offset, -sw_offset),
                 (sw_offset, sw_offset),
@@ -371,7 +409,7 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
             for (ox, oz) in offsets {
                 let sx = cx + ox;
                 let sz = cz + oz;
-                // Draw pole (using GPU-loaded plain_cube_model instead of CPU-mesh-generated cylinders)
+                // Draw pole
                 d3.draw_model_ex(
                     &assets.plain_cube_model,
                     Vector3 { x: sx, y: 2.0, z: sz },

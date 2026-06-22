@@ -58,7 +58,7 @@ impl MissionState {
         self.banner_timer = 4.0;
     }
 
-    pub fn start_new(&mut self, player_pos: Vector3, world_half: f32) {
+    pub fn start_new(&mut self, player_pos: Vector3, _world_half: f32) {
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let mission_type = match rng.gen_range(0..4) {
@@ -69,11 +69,11 @@ impl MissionState {
         };
         // Place marker a good distance from player.
         let angle = rng.gen::<f32>() * std::f32::consts::TAU;
-        let dist = rng.gen_range(world_half * 0.3..world_half * 0.8);
+        let dist = rng.gen_range(120.0..320.0);
         let marker = Vector3 {
-            x: (player_pos.x + angle.cos() * dist).clamp(-world_half + 5.0, world_half - 5.0),
+            x: player_pos.x + angle.cos() * dist,
             y: 0.0,
-            z: (player_pos.z + angle.sin() * dist).clamp(-world_half + 5.0, world_half - 5.0),
+            z: player_pos.z + angle.sin() * dist,
         };
         self.mission_type = mission_type;
         self.marker = marker;

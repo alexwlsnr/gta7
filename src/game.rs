@@ -118,7 +118,7 @@ pub struct Game<'a> {
 
 impl<'a> Game<'a> {
     pub fn new(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: Config, audio: &'a RaylibAudio) -> Self {
-        let city = City::generate(&cfg);
+        let mut city = City::generate(&cfg);
         let mut assets = Assets::load(rl, thread, &cfg);
         let mut sfx = crate::sound::SoundEffects::load(audio);
         sfx.set_sfx_volume(cfg.sfx_volume);
@@ -131,6 +131,18 @@ impl<'a> Game<'a> {
         // Player at center on a road.
         let player_pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
         let player = Player::new(player_pos);
+
+        let mut shops = Vec::new();
+        let mut pickups = Vec::new();
+
+        // Regenerate starting block area to properly populate initial shops and pickups around the player
+        city.generated_blocks.clear();
+        city.buildings.clear();
+        city.parks.clear();
+        city.lanes.clear();
+        city.lights.clear();
+        city.ramps.clear();
+        city.ensure_blocks_around(player_pos, 6, &cfg, &mut shops, &mut pickups);
 
         let mut vehicles = Vec::new();
         let mut traffic = Vec::new();
@@ -174,24 +186,22 @@ impl<'a> Game<'a> {
             Color::new(100, 200, 120, 255),
         ];
         for _ in 0..cfg.max_peds {
-            // Spawn on a random sidewalk: pick a random grid line and offset.
             let (pos, _axis) = city.nearest_sidewalk(
-                rand::random::<f32>() * cfg.world_half() * 2.0 - cfg.world_half(),
-                rand::random::<f32>() * cfg.world_half() * 2.0 - cfg.world_half(),
+                rand::random::<f32>() * 200.0 - 100.0,
+                rand::random::<f32>() * 200.0 - 100.0,
             );
             let col = ped_colors[rand::random::<usize>() % ped_colors.len()];
             peds.push(Ped::new(pos, col));
         }
 
-        // Pickups: health, armor, weapon scattered around.
-        let mut pickups = Vec::new();
+        // Additional static/starting pickups.
         for i in 0..6 {
             let angle = i as f32 * 1.05;
             let dist = 30.0 + i as f32 * 8.0;
             let pos = Vector3 {
-                x: (angle.cos() * dist).clamp(-cfg.world_half() + 5.0, cfg.world_half() - 5.0),
+                x: angle.cos() * dist,
                 y: 0.0,
-                z: (angle.sin() * dist).clamp(-cfg.world_half() + 5.0, cfg.world_half() - 5.0),
+                z: angle.sin() * dist,
             };
             match i % 4 {
                 0 => pickups.push(Pickup::health(pos)),
@@ -201,11 +211,11 @@ impl<'a> Game<'a> {
             }
         }
 
-        // Shops: weapon + health at fixed locations.
-        let shops = vec![
-            Shop::new(Vector3 { x: cfg.world_half() * 0.5, y: 0.0, z: cfg.world_half() * 0.5 }, ShopKind::Weapon),
-            Shop::new(Vector3 { x: -cfg.world_half() * 0.5, y: 0.0, z: -cfg.world_half() * 0.5 }, ShopKind::Health),
-        ];
+        // Shops: weapon + health + armor + ammo at starting locations.
+        shops.push(Shop::new(Vector3 { x: 15.0, y: 0.0, z: 15.0 }, ShopKind::Weapon));
+        shops.push(Shop::new(Vector3 { x: -15.0, y: 0.0, z: -15.0 }, ShopKind::Health));
+        shops.push(Shop::new(Vector3 { x: 15.0, y: 0.0, z: -15.0 }, ShopKind::Armor));
+        shops.push(Shop::new(Vector3 { x: -15.0, y: 0.0, z: 15.0 }, ShopKind::Ammo));
 
         // Start first mission.
         let mut mission = MissionState::new();
@@ -683,15 +693,32 @@ impl<'a> Game<'a> {
                 }
             }
         }
-        self.peds.retain(|p| !p.should_despawn());
+        let target_idx = self.mission_target_idx;
+        let mut new_target_idx = None;
+        let mut next_idx = 0;
+        let mut i = 0;
+        let p_pos = self.player.pos;
+        self.peds.retain(|p| {
+            let is_target = Some(i) == target_idx;
+            let keep = !p.should_despawn() && (vdist_xz(p.pos, p_pos) < 120.0 || is_target);
+            if keep {
+                if is_target {
+                    new_target_idx = Some(next_idx);
+                }
+                next_idx += 1;
+            }
+            i += 1;
+            keep
+        });
+        self.mission_target_idx = new_target_idx;
 
         // Respawn peds up to max.
         while self.peds.len() < self.cfg.max_peds {
             let angle = rand::random::<f32>() * std::f32::consts::TAU;
             let dist = rand::random::<f32>() * 40.0 + 50.0;
             let (pos, _axis) = self.city.nearest_sidewalk(
-                (self.player.pos.x + angle.cos() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
-                (self.player.pos.z + angle.sin() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
+                self.player.pos.x + angle.cos() * dist,
+                self.player.pos.z + angle.sin() * dist,
             );
             let col = Color::new(
                 100 + (rand::random::<u32>() % 120) as u8,
@@ -811,9 +838,9 @@ impl<'a> Game<'a> {
                 let angle = rand::random::<f32>() * std::f32::consts::TAU;
                 let dist = 40.0 + rand::random::<f32>() * 20.0;
                 let pos = Vector3 {
-                    x: (player_pos.x + angle.cos() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
+                    x: player_pos.x + angle.cos() * dist,
                     y: 0.0,
-                    z: (player_pos.z + angle.sin() * dist).clamp(-self.cfg.world_half() + 5.0, self.cfg.world_half() - 5.0),
+                    z: player_pos.z + angle.sin() * dist,
                 };
                 self.cops.push(Cop::new(pos));
             }
@@ -843,6 +870,41 @@ impl<'a> Game<'a> {
         for tc in self.traffic.iter_mut() {
             tc.update(&self.city, &mut self.vehicles, player_pos, dt);
         }
+
+        // Teleport far-away traffic cars near the player
+        for tc in self.traffic.iter_mut() {
+            let v = &mut self.vehicles[tc.vehicle_idx];
+            if vdist_xz(v.pos, player_pos) > 150.0 {
+                if let Some(lane_idx) = self.city.get_random_lane_near(player_pos, 50.0, 100.0) {
+                    let lane = &self.city.lanes[lane_idx];
+                    let from = self.city.intersection(lane.from.0, lane.from.1);
+                    let to = self.city.intersection(lane.to.0, lane.to.1);
+                    let offset = self.city.road_width * 0.25;
+                    let (cx, cz) = match lane.axis {
+                        crate::world::city::Axis::X => (0.0, -offset * lane.dir as f32),
+                        crate::world::city::Axis::Z => (offset * lane.dir as f32, 0.0),
+                    };
+                    let pos = Vector3 { x: from.x + cx, y: 0.0, z: from.z + cz };
+                    let yaw = yaw_from_dir(vnorm_xz(vsub(to, from)));
+                    
+                    v.pos = pos;
+                    v.yaw = yaw;
+                    v.prev_pos = pos;
+                    v.prev_yaw = yaw;
+                    v.vel = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
+                    v.speed = 12.0;
+                    v.health = v.max_health;
+                    v.destroyed = false;
+                    v.explode_timer = 0.0;
+                    
+                    tc.current_lane = lane_idx;
+                    tc.lane_progress = 0.0;
+                }
+            }
+        }
+
+        // Periodic cleanup of inactive/far-away vehicles to prevent memory growth
+        self.cleanup_inactive_vehicles();
 
         // --- Car-vs-Car Collisions ---
         let num_vehicles = self.vehicles.len();
@@ -1102,6 +1164,56 @@ impl<'a> Game<'a> {
         self.player.money -= loss;
         self.wanted.clear();
         self.mission.show_banner(&format!("Respawned. Lost ${}", loss));
+    }
+
+
+
+    fn cleanup_inactive_vehicles(&mut self) {
+        let player_pos = self.player.pos;
+        let player_vehicle_idx = self.player.in_vehicle;
+
+        let mut referenced = std::collections::HashSet::new();
+        if let Some(idx) = player_vehicle_idx {
+            referenced.insert(idx);
+        }
+        for tc in &self.traffic {
+            referenced.insert(tc.vehicle_idx);
+        }
+        for pc in &self.police_cars {
+            referenced.insert(pc.vehicle_idx);
+        }
+
+        let mut new_vehicles = Vec::new();
+        let mut index_map = std::collections::HashMap::new();
+
+        for (old_idx, v) in self.vehicles.drain(..).enumerate() {
+            let keep = referenced.contains(&old_idx) || vdist_xz(v.pos, player_pos) < 120.0;
+            if keep {
+                let new_idx = new_vehicles.len();
+                index_map.insert(old_idx, new_idx);
+                new_vehicles.push(v);
+            }
+        }
+        self.vehicles = new_vehicles;
+
+        if let Some(old_idx) = self.player.in_vehicle {
+            self.player.in_vehicle = index_map.get(&old_idx).copied();
+        }
+        for tc in &mut self.traffic {
+            if let Some(&new_idx) = index_map.get(&tc.vehicle_idx) {
+                tc.vehicle_idx = new_idx;
+            }
+        }
+        for pc in &mut self.police_cars {
+            if let Some(&new_idx) = index_map.get(&pc.vehicle_idx) {
+                pc.vehicle_idx = new_idx;
+            }
+        }
+        for cop in &mut self.cops {
+            if let Some(old_idx) = cop.in_car {
+                cop.in_car = index_map.get(&old_idx).copied();
+            }
+        }
     }
 
     /// Render one frame with interpolation alpha.
