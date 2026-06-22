@@ -9,6 +9,10 @@ pub struct SoundEffects<'a> {
     pub complete: Sound<'a>,
     pub enter_exit: Sound<'a>,
     pub engine: Music<'a>,
+    pub radio: Vec<Music<'a>>,
+    pub radio_idx: usize,
+    pub sfx_volume: f32,
+    pub music_volume: f32,
 }
 
 impl<'a> SoundEffects<'a> {
@@ -50,6 +54,16 @@ impl<'a> SoundEffects<'a> {
         engine.set_looping(true);
         engine.set_volume(0.0); // silent until player enters a vehicle
 
+        // 7. Radio — Kevin MacLeod tracks (CC BY 4.0).
+        let mut radio = Vec::new();
+        for path in &["assets/music/GoCart.mp3", "assets/music/LaserGroove.mp3"] {
+            if let Ok(mut m) = audio.new_music(path) {
+                m.set_looping(true);
+                m.set_volume(0.3);
+                radio.push(m);
+            }
+        }
+
         SoundEffects {
             shoot,
             explosion,
@@ -57,6 +71,10 @@ impl<'a> SoundEffects<'a> {
             complete,
             enter_exit,
             engine,
+            radio,
+            radio_idx: 0,
+            sfx_volume: 0.7,
+            music_volume: 0.3,
         }
     }
 
@@ -84,9 +102,54 @@ impl<'a> SoundEffects<'a> {
         }
     }
 
-    /// Must be called every frame to keep the music stream fed.
-    pub fn update_music(&self) {
+    /// Must be called every frame to keep all music streams fed.
+    pub fn update_music(&mut self) {
         self.engine.update_stream();
+        for m in &self.radio {
+            m.update_stream();
+        }
+    }
+
+    /// Start playing the radio if not already playing.
+    pub fn start_radio(&mut self) {
+        if self.radio.is_empty() {
+            return;
+        }
+        let m = &self.radio[self.radio_idx];
+        if !m.is_stream_playing() {
+            m.play_stream();
+        }
+    }
+
+    /// Update radio volume and cycle tracks when one finishes.
+    pub fn update_radio(&mut self) {
+        if self.radio.is_empty() {
+            return;
+        }
+        let len = self.radio.len();
+        let m = &self.radio[self.radio_idx];
+        if !m.is_stream_playing() {
+            // Track finished — cycle to next.
+            self.radio_idx = (self.radio_idx + 1) % len;
+            self.radio[self.radio_idx].play_stream();
+        }
+        // Apply current music volume.
+        self.radio[self.radio_idx].set_volume(self.music_volume);
+    }
+
+    /// Set SFX volume (applies to all one-shot sounds).
+    pub fn set_sfx_volume(&mut self, vol: f32) {
+        self.sfx_volume = vol;
+        self.shoot.set_volume(vol);
+        self.explosion.set_volume(vol);
+        self.crash.set_volume(vol);
+        self.complete.set_volume(vol);
+        self.enter_exit.set_volume(vol);
+    }
+
+    /// Set music/radio volume.
+    pub fn set_music_volume(&mut self, vol: f32) {
+        self.music_volume = vol;
     }
 }
 

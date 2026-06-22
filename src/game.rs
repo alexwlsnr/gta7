@@ -40,6 +40,9 @@ pub struct Game<'a> {
     pub mission_target_idx: Option<usize>,
     pub look_accum_x: f32,
     pub look_accum_y: f32,
+    pub paused: bool,
+    pub quit: bool,
+    pub pending_fullscreen: bool,
     pub sfx: crate::sound::SoundEffects<'a>,
 }
 
@@ -47,7 +50,10 @@ impl<'a> Game<'a> {
     pub fn new(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: Config, audio: &'a RaylibAudio) -> Self {
         let city = City::generate(&cfg);
         let assets = Assets::load(rl, thread, &cfg);
-        let sfx = crate::sound::SoundEffects::load(audio);
+        let mut sfx = crate::sound::SoundEffects::load(audio);
+        sfx.set_sfx_volume(cfg.sfx_volume);
+        sfx.set_music_volume(cfg.music_volume);
+        sfx.start_radio();
 
         // Player at center on a road.
         let player_pos = Vector3 { x: 0.0, y: 0.0, z: 0.0 };
@@ -144,6 +150,9 @@ impl<'a> Game<'a> {
             mission_target_idx: None,
             look_accum_x: 0.0,
             look_accum_y: 0.0,
+            paused: false,
+            quit: false,
+            pending_fullscreen: false,
             sfx,
         }
     }
@@ -752,6 +761,7 @@ impl<'a> Game<'a> {
     /// Render one frame with interpolation alpha.
     pub fn render(&mut self, rl: &mut RaylibHandle, thread: &RaylibThread, alpha: f32, fps: i32) {
         self.sfx.update_music();
+        self.sfx.update_radio();
         let cam = self.camera.to_camera3d();
         let cam_pos = self.camera.pos;
         let cam_fwd = self.camera.forward();
@@ -776,11 +786,11 @@ impl<'a> Game<'a> {
         let mut d = rl.begin_drawing(thread);
         // Clear color + depth buffer (depth clear is essential — without it 3D
         // geometry fails the depth test against stale values and renders nothing).
-        d.clear_background(self.assets.sky_bottom);
-        // Sky gradient (top-to-bottom) drawn over the cleared color buffer.
+        // Day/night sky colors computed from game time.
+        let total_hours = (self.time * self.cfg.time_scale).rem_euclid(24.0);
+        let (sky_top, sky_bottom) = crate::config::sky_colors_for_hour(total_hours);
+        d.clear_background(sky_bottom);
         let sh = d.get_screen_height();
-        let sky_top = self.assets.sky_top;
-        let sky_bottom = self.assets.sky_bottom;
         for y in (0..sh).step_by(2) {
             let t = y as f32 / sh as f32;
             let c = Color::new(
@@ -939,6 +949,128 @@ impl<'a> Game<'a> {
             d.draw_rectangle(bx + 1, by + 1, hp_w.max(0).min(bar_w - 2), bar_h - 2, color);
             // Border
             d.draw_rectangle_lines(bx, by, bar_w, bar_h, Color::new(10, 10, 10, 255));
+        }
+
+        // Clock display (day/night cycle time).
+        let time_str = crate::config::format_game_time(self.time, self.cfg.time_scale);
+        let clock_w = d.measure_text(&time_str, 20);
+        d.draw_text(&time_str, d.get_screen_width() - clock_w - 16, 8, 20, Color::new(255, 255, 255, 200));
+        d.draw_text(&time_str, d.get_screen_width() - clock_w - 17, 7, 20, Color::new(0, 0, 0, 150));
+
+        // Pause menu overlay.
+        if self.paused {
+            self.render_pause_menu(&mut d);
+        }
+    }
+
+    /// Render the pause menu overlay with mouse interaction.
+    fn render_pause_menu(&mut self, d: &mut RaylibDrawHandle) {
+        use raylib::consts::MouseButton;
+
+        let sw = d.get_screen_width();
+        let sh = d.get_screen_height();
+        let mx = d.get_mouse_x();
+        let my = d.get_mouse_y();
+        let mouse_down = d.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT);
+        let mouse_pressed = d.is_mouse_button_pressed(MouseButton::MOUSE_BUTTON_LEFT);
+
+        // Dim overlay.
+        d.draw_rectangle(0, 0, sw, sh, Color::new(0, 0, 0, 180));
+
+        // Panel.
+        let pw = 400;
+        let ph = 460;
+        let px = (sw - pw) / 2;
+        let py = (sh - ph) / 2;
+        d.draw_rectangle(px, py, pw, ph, Color::new(30, 30, 40, 240));
+        d.draw_rectangle_lines(px, py, pw, ph, Color::new(80, 80, 100, 255));
+
+        // Title.
+        let title = "PAUSED";
+        let tw = d.measure_text(title, 36);
+        d.draw_text(title, px + (pw - tw) / 2, py + 20, 36, Color::new(255, 255, 255, 255));
+
+        let mut y = py + 80;
+        let label_x = px + 30;
+        let item_h = 44;
+        let btn_w = 200;
+        let btn_h = 40;
+        let btn_x = px + (pw - btn_w) / 2;
+
+        // Helper: click-in-rect check.
+        let in_rect = |x: i32, y: i32, rx: i32, ry: i32, rw: i32, rh: i32| {
+            x >= rx && x <= rx + rw && y >= ry && y <= ry + rh
+        };
+
+        // Fullscreen toggle.
+        let fs_text = format!("Fullscreen: {}", if d.is_window_fullscreen() { "ON" } else { "OFF" });
+        d.draw_text(&fs_text, label_x, y, 20, Color::new(200, 200, 220, 255));
+        if mouse_pressed && in_rect(mx, my, label_x, y - 4, 200, 24) {
+            self.pending_fullscreen = true;
+        }
+        y += item_h;
+
+        // Framerate cycle.
+        let fps_text = format!("Framerate: {}", self.cfg.logic_rate.label());
+        d.draw_text(&fps_text, label_x, y, 20, Color::new(200, 200, 220, 255));
+        if mouse_pressed && in_rect(mx, my, label_x, y - 4, 200, 24) {
+            self.cfg.logic_rate = self.cfg.logic_rate.next();
+        }
+        y += item_h;
+
+        // SFX Volume slider.
+        d.draw_text("SFX Volume", label_x, y, 20, Color::new(200, 200, 220, 255));
+        let slider_x = label_x + 130;
+        let slider_w = 200;
+        let slider_y = y + 4;
+        d.draw_rectangle(slider_x, slider_y, slider_w, 16, Color::new(60, 60, 70, 255));
+        let sfx_fill = (self.sfx.sfx_volume * slider_w as f32) as i32;
+        d.draw_rectangle(slider_x, slider_y, sfx_fill, 16, Color::new(80, 160, 220, 255));
+        d.draw_rectangle_lines(slider_x, slider_y, slider_w, 16, Color::new(120, 120, 140, 255));
+        if mouse_down && in_rect(mx, my, slider_x - 4, slider_y - 4, slider_w + 8, 24) {
+            let v = ((mx - slider_x) as f32 / slider_w as f32).clamp(0.0, 1.0);
+            self.cfg.sfx_volume = v;
+            self.sfx.set_sfx_volume(v);
+        }
+        y += item_h;
+
+        // Music Volume slider.
+        d.draw_text("Music", label_x, y, 20, Color::new(200, 200, 220, 255));
+        d.draw_rectangle(slider_x, slider_y + item_h, slider_w, 16, Color::new(60, 60, 70, 255));
+        let mus_y = y + 4;
+        let mus_fill = (self.sfx.music_volume * slider_w as f32) as i32;
+        d.draw_rectangle(slider_x, mus_y, mus_fill, 16, Color::new(160, 80, 200, 255));
+        d.draw_rectangle_lines(slider_x, mus_y, slider_w, 16, Color::new(120, 120, 140, 255));
+        if mouse_down && in_rect(mx, my, slider_x - 4, mus_y - 4, slider_w + 8, 24) {
+            let v = ((mx - slider_x) as f32 / slider_w as f32).clamp(0.0, 1.0);
+            self.cfg.music_volume = v;
+            self.sfx.set_music_volume(v);
+        }
+        y += item_h + 10;
+
+        // Resume button.
+        let resume_hover = in_rect(mx, my, btn_x, y, btn_w, btn_h);
+        let resume_col = if resume_hover { Color::new(60, 140, 80, 255) } else { Color::new(40, 100, 60, 255) };
+        d.draw_rectangle(btn_x, y, btn_w, btn_h, resume_col);
+        d.draw_rectangle_lines(btn_x, y, btn_w, btn_h, Color::new(120, 200, 140, 255));
+        let rt = "RESUME";
+        let rtw = d.measure_text(rt, 22);
+        d.draw_text(rt, btn_x + (btn_w - rtw) / 2, y + 10, 22, Color::new(255, 255, 255, 255));
+        if mouse_pressed && resume_hover {
+            self.paused = false;
+        }
+        y += btn_h + 12;
+
+        // Quit button.
+        let quit_hover = in_rect(mx, my, btn_x, y, btn_w, btn_h);
+        let quit_col = if quit_hover { Color::new(160, 50, 50, 255) } else { Color::new(120, 35, 35, 255) };
+        d.draw_rectangle(btn_x, y, btn_w, btn_h, quit_col);
+        d.draw_rectangle_lines(btn_x, y, btn_w, btn_h, Color::new(220, 120, 120, 255));
+        let qt = "QUIT";
+        let qtw = d.measure_text(qt, 22);
+        d.draw_text(qt, btn_x + (btn_w - qtw) / 2, y + 10, 22, Color::new(255, 255, 255, 255));
+        if mouse_pressed && quit_hover {
+            self.quit = true;
         }
     }
 
