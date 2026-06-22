@@ -357,6 +357,10 @@ impl<'a> Game<'a> {
         self.fx.step(dt);
         self.city.step_lights(dt);
 
+        // --- Endless procedural block generation ---
+        let player_pos = self.player.pos;
+        self.city.ensure_blocks_around(player_pos, 6, &self.cfg, &mut self.shops, &mut self.pickups);
+
         // --- Player meta (recoil, cooldown, respawn) ---
         self.player.update_meta(dt);
 
