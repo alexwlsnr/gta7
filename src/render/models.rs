@@ -9,7 +9,8 @@ use crate::vehicle::{Vehicle, VehicleKind, VehicleVariant};
 use crate::ai::ped::Ped;
 use crate::ai::cop::Cop;
 use crate::player::Player;
-use crate::mathx::{vadd, vsub, vscale};
+use crate::render::lighting::LightingSystem;
+use crate::mathx::vadd;
 
 /// Cached GPU assets built once at startup. Textures are kept as fields because
 /// the `Model`s hold raw pointers to them — they must outlive the models.
@@ -18,6 +19,13 @@ pub struct Assets {
     pub plain_cube_model: Model, // unit cube, lit via shader with a 1x1 white albedo texture
     pub carbon_cube_model: Model, // unit cube with carbon fiber texture
     pub grill_cube_model: Model,  // unit cube with grille texture
+    pub cylinder_model: Model,    // cylinder model for wheels and exhaust pipes
+    pub sphere_model: Model,      // sphere model for headlights, taillights, sirens
+    pub tire_model: Model,        // cylinder model with tire tread texture
+    pub headlight_model: Model,   // cube model with headlight texture
+    pub taillight_model: Model,   // cube model with taillight texture
+    pub plate_model: Model,       // thin cube model with license plate texture
+    pub dash_model: Model,        // cube model with dashboard texture
     pub window_tex: Texture2D,
     pub white_tex: Texture2D,
     pub ground_model: Model,     // large plane with ground texture
@@ -25,6 +33,11 @@ pub struct Assets {
     pub road_tex: Texture2D,     // for HUD minimap
     pub carbon_tex: Texture2D,
     pub grill_tex: Texture2D,
+    pub tire_tex: Texture2D,
+    pub hl_tex: Texture2D,
+    pub tl_tex: Texture2D,
+    pub plate_tex: Texture2D,
+    pub dash_tex: Texture2D,
     pub sky_top: Color,
     pub sky_bottom: Color,
 }
@@ -151,11 +164,162 @@ impl Assets {
             .materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &grill_tex);
 
+        // --- Cylinder model (unit: radius 0.5, height 1.0) ---
+        let cyl_mesh = Mesh::gen_mesh_cylinder(thread, 0.5, 1.0, 16);
+        let cyl_weak = unsafe { cyl_mesh.make_weak() };
+        let mut cylinder_model = rl.load_model_from_mesh(thread, cyl_weak).unwrap();
+        cylinder_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &white_tex);
+
+        // --- Sphere model (unit: radius 0.5) ---
+        let sph_mesh = Mesh::gen_mesh_sphere(thread, 0.5, 16, 16);
+        let sph_weak = unsafe { sph_mesh.make_weak() };
+        let mut sphere_model = rl.load_model_from_mesh(thread, sph_weak).unwrap();
+        sphere_model
+            .materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &white_tex);
+
+        // --- 1. Tire Tread Texture & Model ---
+        let mut tire_img = Image::gen_image_color(16, 16, Color::new(28, 28, 28, 255));
+        for y in 0..16 {
+            for x in 0..16 {
+                // herringbone tread pattern
+                let is_groove = (x == 4) || (x == 12) || ((x + y) % 4 == 0 && (x > 4 && x < 12));
+                if is_groove {
+                    tire_img.draw_pixel(x, y, Color::new(14, 14, 14, 255));
+                }
+            }
+        }
+        let tire_tex = rl.load_texture_from_image(thread, &tire_img).unwrap();
+        let tire_mesh = Mesh::gen_mesh_cylinder(thread, 0.5, 1.0, 16);
+        let tire_weak = unsafe { tire_mesh.make_weak() };
+        let mut tire_model = rl.load_model_from_mesh(thread, tire_weak).unwrap();
+        tire_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &tire_tex);
+
+        // --- 2. Headlight Texture & Model ---
+        let mut hl_img = Image::gen_image_color(16, 16, Color::new(230, 230, 235, 255));
+        for y in 0..16 {
+            for x in 0..16 {
+                let dx = x as f32 - 7.5;
+                let dy = y as f32 - 7.5;
+                let r2 = dx*dx + dy*dy;
+                if r2 < 12.0 {
+                    hl_img.draw_pixel(x, y, Color::new(255, 255, 230, 255)); // bulb glow
+                } else if r2 < 24.0 {
+                    hl_img.draw_pixel(x, y, Color::new(170, 170, 175, 255)); // silver reflector
+                } else {
+                    hl_img.draw_pixel(x, y, Color::new(40, 40, 42, 255)); // dark housing
+                }
+            }
+        }
+        let hl_tex = rl.load_texture_from_image(thread, &hl_img).unwrap();
+        let hl_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let hl_weak = unsafe { hl_mesh.make_weak() };
+        let mut headlight_model = rl.load_model_from_mesh(thread, hl_weak).unwrap();
+        headlight_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &hl_tex);
+
+        // --- 3. Taillight Texture & Model ---
+        let mut tl_img = Image::gen_image_color(16, 16, Color::new(180, 20, 20, 255));
+        for y in 0..16 {
+            for x in 0..16 {
+                let is_grid = (x % 3 == 0) || (y % 3 == 0);
+                if is_grid {
+                    tl_img.draw_pixel(x, y, Color::new(240, 40, 40, 255)); // bright grid
+                }
+                // indicators / reverse
+                if x >= 11 && y >= 11 {
+                    tl_img.draw_pixel(x, y, Color::new(245, 245, 245, 255)); // white reverse
+                } else if x >= 11 && y >= 6 && y < 11 {
+                    tl_img.draw_pixel(x, y, Color::new(255, 140, 0, 255)); // amber turn signal
+                }
+            }
+        }
+        let tl_tex = rl.load_texture_from_image(thread, &tl_img).unwrap();
+        let tl_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let tl_weak = unsafe { tl_mesh.make_weak() };
+        let mut taillight_model = rl.load_model_from_mesh(thread, tl_weak).unwrap();
+        taillight_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &tl_tex);
+
+        // --- 4. License Plate Texture & Model ---
+        let mut plate_img = Image::gen_image_color(32, 16, Color::new(240, 220, 40, 255)); // yellow license plate
+        // border
+        for x in 0..32 {
+            plate_img.draw_pixel(x, 0, Color::new(10, 10, 10, 255));
+            plate_img.draw_pixel(x, 15, Color::new(10, 10, 10, 255));
+        }
+        for y in 0..16 {
+            plate_img.draw_pixel(0, y, Color::new(10, 10, 10, 255));
+            plate_img.draw_pixel(31, y, Color::new(10, 10, 10, 255));
+        }
+        // Draw "GTA 7" text using pixel matrices
+        let draw_char_pixel = |img: &mut Image, c: char, ox: i32, oy: i32| {
+            let pixels: &[(i32, i32)] = match c {
+                'G' => &[(1,0),(2,0),(3,0),(0,1),(0,2),(0,3),(3,2),(4,2),(1,4),(2,4),(3,4),(4,3),(4,1)],
+                'T' => &[(0,0),(1,0),(2,0),(3,0),(4,0),(2,1),(2,2),(2,3),(2,4)],
+                'A' => &[(2,0),(1,1),(3,1),(0,2),(4,2),(0,3),(1,3),(2,3),(3,3),(4,3),(0,4),(4,4)],
+                '7' => &[(0,0),(1,0),(2,0),(3,0),(4,0),(4,1),(3,2),(2,3),(1,4)],
+                _ => &[],
+            };
+            for &(px, py) in pixels {
+                img.draw_pixel(ox + px, oy + py, Color::new(10, 10, 12, 255));
+            }
+        };
+        draw_char_pixel(&mut plate_img, 'G', 4, 5);
+        draw_char_pixel(&mut plate_img, 'T', 10, 5);
+        draw_char_pixel(&mut plate_img, 'A', 16, 5);
+        draw_char_pixel(&mut plate_img, '7', 23, 5);
+
+        let plate_tex = rl.load_texture_from_image(thread, &plate_img).unwrap();
+        let plate_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let plate_weak = unsafe { plate_mesh.make_weak() };
+        let mut plate_model = rl.load_model_from_mesh(thread, plate_weak).unwrap();
+        plate_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &plate_tex);
+
+        // --- 5. Dashboard Texture & Model ---
+        let mut dash_img = Image::gen_image_color(32, 16, Color::new(25, 25, 28, 255)); // dark dash
+        // speedo dial outline
+        for a in 0..360 {
+            let rad = (a as f32).to_radians();
+            let sx = (8.0 + 4.5 * rad.cos()) as i32;
+            let sy = (8.0 + 4.5 * rad.sin()) as i32;
+            dash_img.draw_pixel(sx, sy, Color::new(0, 180, 255, 255)); // cyan glow speedo
+            let tx = (22.0 + 4.5 * rad.cos()) as i32;
+            let ty = (8.0 + 4.5 * rad.sin()) as i32;
+            dash_img.draw_pixel(tx, ty, Color::new(0, 180, 255, 255)); // cyan glow tacho
+        }
+        // Speedo needle (pointing up-right)
+        dash_img.draw_pixel(8, 8, Color::new(255, 100, 0, 255));
+        dash_img.draw_pixel(9, 7, Color::new(255, 100, 0, 255));
+        dash_img.draw_pixel(10, 6, Color::new(255, 100, 0, 255));
+        // Tacho needle (pointing up-left)
+        dash_img.draw_pixel(22, 8, Color::new(255, 100, 0, 255));
+        dash_img.draw_pixel(21, 7, Color::new(255, 100, 0, 255));
+        dash_img.draw_pixel(20, 6, Color::new(255, 100, 0, 255));
+
+        let dash_tex = rl.load_texture_from_image(thread, &dash_img).unwrap();
+        let dash_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let dash_weak = unsafe { dash_mesh.make_weak() };
+        let mut dash_model = rl.load_model_from_mesh(thread, dash_weak).unwrap();
+        dash_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &dash_tex);
+
         Assets {
             building_model,
             plain_cube_model,
             carbon_cube_model,
             grill_cube_model,
+            cylinder_model,
+            sphere_model,
+            tire_model,
+            headlight_model,
+            taillight_model,
+            plate_model,
+            dash_model,
             window_tex,
             white_tex,
             ground_model,
@@ -163,6 +327,11 @@ impl Assets {
             road_tex,
             carbon_tex,
             grill_tex,
+            tire_tex,
+            hl_tex,
+            tl_tex,
+            plate_tex,
+            dash_tex,
             sky_top: p.sky_top(),
             sky_bottom: p.sky_bottom(),
         }
@@ -509,24 +678,26 @@ fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &
 pub fn draw_car(
     d3: &mut impl RaylibDraw3D,
     assets: &Assets,
+    lighting: &mut LightingSystem,
     pos: Vector3,
     yaw: f32,
     pitch: f32,
     roll: f32,
+    wheel_rot: f32,
     color: Color,
     damaged: f32,
     kind: VehicleKind,
     variant: VehicleVariant,
     time: f32,
 ) {
-    let (h_val, w_rad) = match variant {
+    let (h_val, w_rad_val) = match variant {
         VehicleVariant::Sports => (0.65, 0.38),
         VehicleVariant::SUV => (1.1, 0.52),
         VehicleVariant::Pickup => (0.9, 0.5),
         VehicleVariant::Sedan => (0.8, 0.4),
     };
     let mut pos = pos;
-    pos.y += h_val * 0.5 + w_rad;
+    pos.y += h_val * 0.5 + w_rad_val;
 
     let half_yaw = yaw * 0.5;
     let q_yaw = Quat {
@@ -591,22 +762,186 @@ pub fn draw_car(
         VehicleVariant::Sedan => (1.6, 0.6, 2.0, -0.2, 0.7),
     };
 
-    // 1. Draw Main Body
-    d3.draw_model_ex(
+    // Macro for drawing models with local coordinate offsets aligned to vehicle's rotation
+    macro_rules! local_draw {
+        ($model:expr, $local_pos:expr, $scale:expr, $tint:expr) => {
+            d3.draw_model_ex(
+                $model,
+                vadd(pos, rotate_vector($local_pos, q)),
+                axis, angle_deg,
+                $scale,
+                $tint,
+            );
+        };
+    }
+
+    // Macro for drawing models with local rotation offsets aligned to vehicle's rotation
+    macro_rules! local_rot_draw {
+        ($model:expr, $local_pos:expr, $q_rel:expr, $scale:expr, $tint:expr) => {
+            let q_part = q * $q_rel;
+            let (p_axis, p_angle) = quat_to_axis_angle(q_part);
+            d3.draw_model_ex(
+                $model,
+                vadd(pos, rotate_vector($local_pos, q)),
+                p_axis, p_angle,
+                $scale,
+                $tint,
+            );
+        };
+    }
+
+    // 1. Draw High-Poly Split Body Components to form open wheel wells & realistic contours
+    lighting.set_material_properties(0.8, 0.15, 1.0); // Next-gen metallic paint
+
+    // Chassis frame bottom plate (dark black metal)
+    local_draw!(
         &assets.plain_cube_model,
-        pos,
-        axis, angle_deg,
-        Vector3 { x: body_w, y: body_h, z: body_l },
-        body_color,
+        Vector3 { x: 0.0, y: -body_h * 0.5 + 0.04, z: 0.0 },
+        Vector3 { x: body_w * 0.94, y: 0.08, z: body_l * 0.96 },
+        Color::new(25, 25, 25, 255)
     );
-    // Body Outline
-    d3.draw_model_wires_ex(
+
+    // Front engine nose block
+    local_draw!(
         &assets.plain_cube_model,
-        pos,
-        axis, angle_deg,
-        Vector3 { x: body_w, y: body_h, z: body_l },
-        Color::new(20, 20, 20, 255),
+        Vector3 { x: 0.0, y: -body_h * 0.15, z: body_l * 0.38 },
+        Vector3 { x: body_w * 0.96, y: body_h * 0.7, z: body_l * 0.24 },
+        body_color
     );
+
+    // Aerodynamically slanted hood cover
+    let q_hood_rel = Quat {
+        w: (-4.0f32.to_radians() * 0.5).cos(),
+        x: (-4.0f32.to_radians() * 0.5).sin(),
+        y: 0.0,
+        z: 0.0,
+    };
+    local_rot_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.0, y: body_h * 0.22, z: body_l * 0.32 },
+        q_hood_rel,
+        Vector3 { x: body_w * 0.95, y: 0.03, z: body_l * 0.26 },
+        body_color
+    );
+
+    // Extra detail: Carbon hood stripe for Sports variant
+    if variant == VehicleVariant::Sports {
+        lighting.set_material_properties(0.2, 0.5, 0.4); // Carbon material
+        local_rot_draw!(
+            &assets.carbon_cube_model,
+            Vector3 { x: 0.0, y: body_h * 0.225, z: body_l * 0.32 },
+            q_hood_rel,
+            Vector3 { x: body_w * 0.25, y: 0.031, z: body_l * 0.26 },
+            Color::WHITE
+        );
+        lighting.set_material_properties(0.8, 0.15, 1.0); // Reset to paint
+    }
+
+    // Front bumper / lower fascia
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.0, y: -body_h * 0.3, z: body_l * 0.48 },
+        Vector3 { x: body_w, y: body_h * 0.4, z: 0.08 },
+        body_color
+    );
+
+    // Front left & right wheel arches (fenders)
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -body_w * 0.48, y: -body_h * 0.05, z: body_l * 0.32 },
+        Vector3 { x: 0.04, y: body_h * 0.9, z: body_l * 0.22 },
+        body_color
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: body_w * 0.48, y: -body_h * 0.05, z: body_l * 0.32 },
+        Vector3 { x: 0.04, y: body_h * 0.9, z: body_l * 0.22 },
+        body_color
+    );
+
+    // Middle cabin floor frame and side skirts
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.0, y: -body_h * 0.2, z: -body_l * 0.02 },
+        Vector3 { x: body_w * 0.96, y: body_h * 0.6, z: body_l * 0.44 },
+        body_color
+    );
+
+    // Left & right detailed doors with handle slots
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -body_w * 0.49, y: -body_h * 0.05, z: -body_l * 0.02 },
+        Vector3 { x: 0.02, y: body_h * 0.9, z: body_l * 0.42 },
+        body_color
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: body_w * 0.49, y: -body_h * 0.05, z: -body_l * 0.02 },
+        Vector3 { x: 0.02, y: body_h * 0.9, z: body_l * 0.42 },
+        body_color
+    );
+
+    // Chrome door handles
+    lighting.set_material_properties(0.9, 0.2, 1.2);
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -body_w * 0.502, y: body_h * 0.12, z: -body_l * 0.12 },
+        Vector3 { x: 0.015, y: 0.025, z: 0.12 },
+        Color::new(200, 200, 205, 255)
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: body_w * 0.502, y: body_h * 0.12, z: -body_l * 0.12 },
+        Vector3 { x: 0.015, y: 0.025, z: 0.12 },
+        Color::new(200, 200, 205, 255)
+    );
+    lighting.set_material_properties(0.8, 0.15, 1.0); // Reset to paint
+
+    // Rear left & right wheel arches (fenders)
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -body_w * 0.48, y: -body_h * 0.05, z: -body_l * 0.32 },
+        Vector3 { x: 0.04, y: body_h * 0.9, z: body_l * 0.22 },
+        body_color
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: body_w * 0.48, y: -body_h * 0.05, z: -body_l * 0.32 },
+        Vector3 { x: 0.04, y: body_h * 0.9, z: body_l * 0.22 },
+        body_color
+    );
+
+    // Rear bumper & trunk deck block
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.0, y: -body_h * 0.3, z: -body_l * 0.48 },
+        Vector3 { x: body_w, y: body_h * 0.4, z: 0.08 },
+        body_color
+    );
+
+    // Rear trunk deck block (except Pickup)
+    if variant != VehicleVariant::Pickup {
+        local_draw!(
+            &assets.plain_cube_model,
+            Vector3 { x: 0.0, y: -body_h * 0.15, z: -body_l * 0.38 },
+            Vector3 { x: body_w * 0.96, y: body_h * 0.7, z: body_l * 0.24 },
+            body_color
+        );
+
+        let q_trunk_rel = Quat {
+            w: (4.0f32.to_radians() * 0.5).cos(),
+            x: (4.0f32.to_radians() * 0.5).sin(),
+            y: 0.0,
+            z: 0.0,
+        };
+        local_rot_draw!(
+            &assets.plain_cube_model,
+            Vector3 { x: 0.0, y: body_h * 0.22, z: -body_l * 0.32 },
+            q_trunk_rel,
+            Vector3 { x: body_w * 0.95, y: 0.03, z: body_l * 0.26 },
+            body_color
+        );
+    }
 
     // 1.5 Draw Front Radiator Grille (dents slightly when damaged)
     let grille_rot = if damaged > 0.2 { (damaged - 0.2) * 15.0 } else { 0.0 };
@@ -615,63 +950,211 @@ pub fn draw_car(
     } else {
         Vector3::zero()
     };
-    let grille_local = Vector3 { x: 0.0, y: -body_h * 0.1, z: body_l * 0.5 + 0.015 };
-    d3.draw_model_ex(
+    let grille_local = Vector3 { x: 0.0, y: -body_h * 0.1, z: body_l * 0.463 };
+    
+    lighting.set_material_properties(0.9, 0.2, 1.2); // Polished chrome grille
+    let q_grille_rel = Quat {
+        w: (grille_rot.to_radians() * 0.5).cos(),
+        x: (grille_rot.to_radians() * 0.5).sin(),
+        y: 0.0,
+        z: 0.0,
+    };
+    local_rot_draw!(
         &assets.grill_cube_model,
-        vadd(pos, rotate_vector(vadd(grille_local, grille_offset), q)),
-        axis, angle_deg + grille_rot,
+        vadd(grille_local, grille_offset),
+        q_grille_rel,
         Vector3 { x: body_w * 0.6, y: body_h * 0.4, z: 0.02 },
-        Color::WHITE,
+        Color::WHITE
     );
 
-    // 2. Draw Cabin (if not Pickup bed area)
-    let cabin_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z };
-    let cabin_world = vadd(pos, rotate_vector(cabin_local, q));
-    d3.draw_model_ex(
+    // 2. Draw Cabin Structure (roof and window framing)
+    lighting.set_material_properties(0.8, 0.15, 1.0); // Next-gen metallic paint for cabin
+    local_draw!(
         &assets.plain_cube_model,
-        cabin_world,
-        axis, angle_deg,
-        Vector3 { x: cabin_w, y: cabin_h, z: cabin_l },
-        cabin_color,
+        Vector3 { x: 0.0, y: cabin_offset_y + cabin_h * 0.5, z: cabin_offset_z - cabin_l * 0.1 },
+        Vector3 { x: cabin_w, y: 0.06, z: cabin_l * 0.6 },
+        cabin_color
+    );
+    // Left A-pillar & C-pillar side frames
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -cabin_w * 0.49, y: cabin_offset_y, z: cabin_offset_z + cabin_l * 0.48 },
+        Vector3 { x: 0.03, y: cabin_h, z: 0.04 },
+        cabin_color
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -cabin_w * 0.49, y: cabin_offset_y, z: cabin_offset_z - cabin_l * 0.48 },
+        Vector3 { x: 0.03, y: cabin_h, z: 0.04 },
+        cabin_color
+    );
+    // Right A-pillar & C-pillar side frames
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: cabin_w * 0.49, y: cabin_offset_y, z: cabin_offset_z + cabin_l * 0.48 },
+        Vector3 { x: 0.03, y: cabin_h, z: 0.04 },
+        cabin_color
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: cabin_w * 0.49, y: cabin_offset_y, z: cabin_offset_z - cabin_l * 0.48 },
+        Vector3 { x: 0.03, y: cabin_h, z: 0.04 },
+        cabin_color
     );
 
-    // 3. Windshield and Side Windows on Cabin
-    let window_color = Color::new(25, 30, 45, 255);
-    // Front windshield
-    let front_windshield_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z + cabin_l * 0.5 + 0.01 };
-    d3.draw_model_ex(
+    // 3. Windshield and Side Windows (with transparent glass shader + specular highlights!)
+    lighting.set_material_properties(0.0, 0.05, 1.5); // High glossy reflection on glass
+
+    // Angled Front Windshield
+    let q_windshield_rel = Quat {
+        w: (32.0f32.to_radians() * 0.5).cos(),
+        x: (32.0f32.to_radians() * 0.5).sin(),
+        y: 0.0,
+        z: 0.0,
+    };
+    local_rot_draw!(
         &assets.plain_cube_model,
-        vadd(pos, rotate_vector(front_windshield_local, q)),
-        axis, angle_deg,
-        Vector3 { x: cabin_w * 0.9, y: cabin_h * 0.7, z: 0.02 },
-        window_color,
+        Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z + cabin_l * 0.5 - 0.04 },
+        q_windshield_rel,
+        Vector3 { x: cabin_w * 0.94, y: 0.02, z: cabin_h * 1.3 },
+        Color::new(25, 30, 45, 120) // semi-transparent window glass
     );
-    // Rear window (only for Sedan/Sports/SUV - Pickup cabin back window is smaller)
-    let rear_window_local = Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z - cabin_l * 0.5 - 0.01 };
-    d3.draw_model_ex(
+
+    // Windshield wipers
+    lighting.set_material_properties(0.1, 0.6, 0.2); // matte wiper plastic
+    local_rot_draw!(
         &assets.plain_cube_model,
-        vadd(pos, rotate_vector(rear_window_local, q)),
-        axis, angle_deg,
-        Vector3 { x: cabin_w * 0.9, y: cabin_h * 0.6, z: 0.02 },
-        window_color,
+        Vector3 { x: -0.22, y: cabin_offset_y - cabin_h * 0.22, z: cabin_offset_z + cabin_l * 0.54 },
+        q_windshield_rel,
+        Vector3 { x: 0.015, y: 0.015, z: cabin_h * 0.8 },
+        Color::new(10, 10, 10, 255)
     );
-    // Left window
-    let left_window_local = Vector3 { x: -cabin_w * 0.5 - 0.01, y: cabin_offset_y, z: cabin_offset_z };
-    d3.draw_model_ex(
+    local_rot_draw!(
         &assets.plain_cube_model,
-        vadd(pos, rotate_vector(left_window_local, q)),
-        axis, angle_deg,
-        Vector3 { x: 0.02, y: cabin_h * 0.7, z: cabin_l * 0.8 },
-        window_color,
+        Vector3 { x: 0.22, y: cabin_offset_y - cabin_h * 0.22, z: cabin_offset_z + cabin_l * 0.54 },
+        q_windshield_rel,
+        Vector3 { x: 0.015, y: 0.015, z: cabin_h * 0.8 },
+        Color::new(10, 10, 10, 255)
     );
-    // Right window
-    let right_window_local = Vector3 { x: cabin_w * 0.5 + 0.01, y: cabin_offset_y, z: cabin_offset_z };
-    d3.draw_model_ex(
+    lighting.set_material_properties(0.0, 0.05, 1.5); // restore glass settings
+
+    // Angled Rear Window (except Pickup)
+    if variant != VehicleVariant::Pickup {
+        let q_rear_win_rel = Quat {
+            w: (-32.0f32.to_radians() * 0.5).cos(),
+            x: (-32.0f32.to_radians() * 0.5).sin(),
+            y: 0.0,
+            z: 0.0,
+        };
+        local_rot_draw!(
+            &assets.plain_cube_model,
+            Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z - cabin_l * 0.4 + 0.04 },
+            q_rear_win_rel,
+            Vector3 { x: cabin_w * 0.94, y: 0.02, z: cabin_h * 1.3 },
+            Color::new(25, 30, 45, 120)
+        );
+    } else {
+        // Vertical Pickup cabin back window
+        local_draw!(
+            &assets.plain_cube_model,
+            Vector3 { x: 0.0, y: cabin_offset_y, z: cabin_offset_z - cabin_l * 0.5 + 0.01 },
+            Vector3 { x: cabin_w * 0.9, y: cabin_h * 0.7, z: 0.02 },
+            Color::new(25, 30, 45, 120)
+        );
+    }
+
+    // Left and Right Side Windows
+    local_draw!(
         &assets.plain_cube_model,
-        vadd(pos, rotate_vector(right_window_local, q)),
-        axis, angle_deg,
-        Vector3 { x: 0.02, y: cabin_h * 0.7, z: cabin_l * 0.8 },
-        window_color,
+        Vector3 { x: -cabin_w * 0.5, y: cabin_offset_y - 0.02, z: cabin_offset_z },
+        Vector3 { x: 0.02, y: cabin_h * 0.75, z: cabin_l * 0.7 },
+        Color::new(25, 30, 45, 120)
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: cabin_w * 0.5, y: cabin_offset_y - 0.02, z: cabin_offset_z },
+        Vector3 { x: 0.02, y: cabin_h * 0.75, z: cabin_l * 0.7 },
+        Color::new(25, 30, 45, 120)
+    );
+
+    // 3.5. Draw Detailed Interior (visible inside the transparent glass!)
+    // Main dashboard body (matte plastic structure)
+    lighting.set_material_properties(0.1, 0.7, 0.15);
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.0, y: cabin_offset_y - 0.12, z: cabin_offset_z + cabin_l * 0.44 },
+        Vector3 { x: cabin_w * 0.92, y: 0.16, z: 0.28 },
+        Color::new(22, 22, 24, 255)
+    );
+
+    // Glowing instrument panel (rotated by 180 deg around Y-axis so the texture faces the driver correctly)
+    let q_inst_rel = Quat {
+        w: 0.0,
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
+    lighting.set_material_properties(0.5, 0.15, 1.4); // highly glossy, glowing material
+    local_rot_draw!(
+        &assets.dash_model,
+        Vector3 { x: -0.32, y: cabin_offset_y - 0.08, z: cabin_offset_z + cabin_l * 0.44 - 0.138 },
+        q_inst_rel,
+        Vector3 { x: 0.32, y: 0.08, z: 0.015 },
+        Color::WHITE
+    );
+
+    // Steering Column
+    lighting.set_material_properties(0.1, 0.7, 0.1);
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -0.32, y: cabin_offset_y - 0.14, z: cabin_offset_z + cabin_l * 0.35 },
+        Vector3 { x: 0.04, y: 0.04, z: 0.3 },
+        Color::new(15, 15, 15, 255)
+    );
+
+    // Steering Wheel (slanted cylinder model)
+    lighting.set_material_properties(0.4, 0.3, 0.8);
+    let q_wheel_tilt = Quat {
+        w: (-20.0f32.to_radians() * 0.5).cos(),
+        x: (-20.0f32.to_radians() * 0.5).sin(),
+        y: 0.0,
+        z: 0.0,
+    };
+    local_rot_draw!(
+        &assets.cylinder_model,
+        Vector3 { x: -0.32, y: cabin_offset_y - 0.06, z: cabin_offset_z + cabin_l * 0.24 },
+        q_wheel_tilt,
+        Vector3 { x: 0.24, y: 0.04, z: 0.24 },
+        Color::new(30, 30, 35, 255)
+    );
+
+    // Front L-shaped Leather Seats (Driver left, Passenger right)
+    lighting.set_material_properties(0.1, 0.8, 0.2); // matte leather
+    // Driver seat
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -0.32, y: cabin_offset_y - 0.22, z: cabin_offset_z + cabin_l * 0.05 },
+        Vector3 { x: 0.44, y: 0.1, z: 0.44 },
+        Color::new(35, 35, 38, 255)
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: -0.32, y: cabin_offset_y - 0.02, z: cabin_offset_z - 0.12 },
+        Vector3 { x: 0.44, y: 0.54, z: 0.1 },
+        Color::new(35, 35, 38, 255)
+    );
+    // Passenger seat
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.32, y: cabin_offset_y - 0.22, z: cabin_offset_z + cabin_l * 0.05 },
+        Vector3 { x: 0.44, y: 0.1, z: 0.44 },
+        Color::new(35, 35, 38, 255)
+    );
+    local_draw!(
+        &assets.plain_cube_model,
+        Vector3 { x: 0.32, y: cabin_offset_y - 0.02, z: cabin_offset_z - 0.12 },
+        Vector3 { x: 0.44, y: 0.54, z: 0.1 },
+        Color::new(35, 35, 38, 255)
     );
 
     // 4. Variant-Specific High-Poly Detail Models
@@ -681,21 +1164,12 @@ pub fn draw_car(
             let spoiler_z = -body_l * 0.46;
             let col_y = body_h * 0.5 + 0.15;
             let left_col = Vector3 { x: -body_w * 0.4, y: col_y, z: spoiler_z };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(left_col, q)),
-                axis, angle_deg,
-                Vector3 { x: 0.08, y: 0.3, z: 0.08 },
-                body_color,
-            );
+            
+            lighting.set_material_properties(0.8, 0.15, 1.0); // Paint for spoiler columns
+            local_draw!(&assets.plain_cube_model, left_col, Vector3 { x: 0.08, y: 0.3, z: 0.08 }, body_color);
             let right_col = Vector3 { x: body_w * 0.4, y: col_y, z: spoiler_z };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(right_col, q)),
-                axis, angle_deg,
-                Vector3 { x: 0.08, y: 0.3, z: 0.08 },
-                body_color,
-            );
+            local_draw!(&assets.plain_cube_model, right_col, Vector3 { x: 0.08, y: 0.3, z: 0.08 }, body_color);
+            
             // Spoiler wing bar (textured with carbon fiber, tilts/hangs loose when damaged)
             let wing_rot = if damaged > 0.3 { (damaged - 0.3) * 25.0 } else { 0.0 };
             let wing_offset = if damaged > 0.3 {
@@ -704,101 +1178,63 @@ pub fn draw_car(
                 Vector3::zero()
             };
             let wing_local = Vector3 { x: 0.0, y: body_h * 0.5 + 0.3, z: spoiler_z };
-            d3.draw_model_ex(
-                &assets.carbon_cube_model,
-                vadd(pos, rotate_vector(vadd(wing_local, wing_offset), q)),
-                axis, angle_deg + wing_rot,
-                Vector3 { x: body_w * 1.05, y: 0.06, z: 0.35 },
-                Color::WHITE, // Multiply by white to render the texture as-is
-            );
-            // Double exhaust pipes at back
-            let ex_z = -body_l * 0.5;
-            let ex_left = Vector3 { x: -0.4, y: -body_h * 0.4, z: ex_z };
-            let ex_right = Vector3 { x: 0.4, y: -body_h * 0.4, z: ex_z };
-            let p_start_left = vadd(pos, rotate_vector(ex_left, q));
-            let p_end_left = vadd(p_start_left, rotate_vector(Vector3 { x: 0.0, y: 0.0, z: -0.2 }, q));
-            let p_start_right = vadd(pos, rotate_vector(ex_right, q));
-            let p_end_right = vadd(p_start_right, rotate_vector(Vector3 { x: 0.0, y: 0.0, z: -0.2 }, q));
             
-            d3.draw_cylinder_ex(p_start_left, p_end_left, 0.08, 0.08, 6, Color::new(180, 180, 180, 255));
-            d3.draw_cylinder_ex(p_start_right, p_end_right, 0.08, 0.08, 6, Color::new(180, 180, 180, 255));
+            lighting.set_material_properties(0.2, 0.5, 0.4); // Carbon fiber spoiler
+            let q_wing_rel = Quat {
+                w: (wing_rot.to_radians() * 0.5).cos(),
+                x: (wing_rot.to_radians() * 0.5).sin(),
+                y: 0.0,
+                z: 0.0,
+            };
+            local_rot_draw!(
+                &assets.carbon_cube_model,
+                vadd(wing_local, wing_offset),
+                q_wing_rel,
+                Vector3 { x: body_w * 1.05, y: 0.06, z: 0.35 },
+                Color::WHITE
+            );
+            
+            // Double exhaust pipes at back (using cylinder model for shadows + chrome reflection!)
+            lighting.set_material_properties(0.95, 0.1, 1.5); // Highly polished chrome
+            let q_exhaust_rel = Quat {
+                w: (std::f32::consts::FRAC_PI_4).cos(),
+                x: (std::f32::consts::FRAC_PI_4).sin(),
+                y: 0.0,
+                z: 0.0,
+            };
+            let ex_z = -body_l * 0.5;
+            let ex_left = Vector3 { x: -0.4, y: -body_h * 0.4, z: ex_z - 0.1 };
+            local_rot_draw!(&assets.cylinder_model, ex_left, q_exhaust_rel, Vector3 { x: 0.16, y: 0.2, z: 0.16 }, Color::new(180, 180, 180, 255));
+            let ex_right = Vector3 { x: 0.4, y: -body_h * 0.4, z: ex_z - 0.1 };
+            local_rot_draw!(&assets.cylinder_model, ex_right, q_exhaust_rel, Vector3 { x: 0.16, y: 0.2, z: 0.16 }, Color::new(180, 180, 180, 255));
         }
         VehicleVariant::SUV => {
-            // Roof rack rails on top of cabin
+            // Roof rack rails
             let rail_y = cabin_offset_y + cabin_h * 0.5 + 0.05;
-            let rail_l_left = Vector3 { x: -cabin_w * 0.45, y: rail_y, z: cabin_offset_z };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(rail_l_left, q)),
-                axis, angle_deg,
-                Vector3 { x: 0.06, y: 0.06, z: cabin_l * 0.9 },
-                Color::new(30, 30, 30, 255),
-            );
-            let rail_l_right = Vector3 { x: cabin_w * 0.45, y: rail_y, z: cabin_offset_z };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(rail_l_right, q)),
-                axis, angle_deg,
-                Vector3 { x: 0.06, y: 0.06, z: cabin_l * 0.9 },
-                Color::new(30, 30, 30, 255),
-            );
+            lighting.set_material_properties(0.6, 0.3, 0.8);
+            local_draw!(&assets.plain_cube_model, Vector3 { x: -cabin_w * 0.45, y: rail_y, z: cabin_offset_z }, Vector3 { x: 0.06, y: 0.06, z: cabin_l * 0.9 }, Color::new(30, 30, 30, 255));
+            local_draw!(&assets.plain_cube_model, Vector3 { x: cabin_w * 0.45, y: rail_y, z: cabin_offset_z }, Vector3 { x: 0.06, y: 0.06, z: cabin_l * 0.9 }, Color::new(30, 30, 30, 255));
+            
             // Spare tire on the back trunk
             let tire_local = Vector3 { x: 0.0, y: 0.1, z: -body_l * 0.5 - 0.1 };
-            let tire_world = vadd(pos, rotate_vector(tire_local, q));
-            let wheel_axis = rotate_vector(Vector3 { x: 0.0, y: 0.0, z: 1.0 }, q);
-            let w_start = vsub(tire_world, vscale(wheel_axis, 0.12));
-            let w_end = vadd(tire_world, vscale(wheel_axis, 0.12));
-            d3.draw_cylinder_ex(w_start, w_end, 0.45, 0.45, 8, Color::new(25, 25, 25, 255));
-            d3.draw_cylinder_ex(w_end, vadd(w_end, vscale(wheel_axis, 0.01)), 0.25, 0.25, 8, Color::new(160, 160, 160, 255));
-            // Bull bar on front bumper
-            let bar_local = Vector3 { x: 0.0, y: -0.1, z: body_l * 0.5 + 0.1 };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(bar_local, q)),
-                axis, angle_deg,
-                Vector3 { x: body_w * 0.8, y: body_h * 0.7, z: 0.08 },
-                Color::new(30, 30, 30, 255),
-            );
+            let q_exhaust_rel = Quat {
+                w: (std::f32::consts::FRAC_PI_4).cos(),
+                x: (std::f32::consts::FRAC_PI_4).sin(),
+                y: 0.0,
+                z: 0.0,
+            };
+            lighting.set_material_properties(0.0, 0.9, 0.1);
+            local_rot_draw!(&assets.tire_model, tire_local, q_exhaust_rel, Vector3 { x: 0.9, y: 0.24, z: 0.9 }, Color::new(25, 25, 25, 255));
+            lighting.set_material_properties(0.9, 0.2, 1.2);
+            local_rot_draw!(&assets.cylinder_model, vadd(tire_local, Vector3 { x: 0.0, y: 0.0, z: 0.12 }), q_exhaust_rel, Vector3 { x: 0.5, y: 0.02, z: 0.5 }, Color::new(160, 160, 160, 255));
         }
         VehicleVariant::Pickup => {
-            // Hollow cargo bed walls
-            // Left wall
-            let wall_y = body_h * 0.5 + 0.35;
-            let left_wall = Vector3 { x: -body_w * 0.46, y: wall_y, z: -1.0 };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(left_wall, q)),
-                axis, angle_deg,
-                Vector3 { x: 0.1, y: 0.7, z: 2.6 },
-                body_color,
-            );
-            // Right wall
-            let right_wall = Vector3 { x: body_w * 0.46, y: wall_y, z: -1.0 };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(right_wall, q)),
-                axis, angle_deg,
-                Vector3 { x: 0.1, y: 0.7, z: 2.6 },
-                body_color,
-            );
-            // Tailgate wall
-            let tailgate = Vector3 { x: 0.0, y: wall_y, z: -2.3 };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(tailgate, q)),
-                axis, angle_deg,
-                Vector3 { x: body_w * 0.9, y: 0.7, z: 0.1 },
-                body_color,
-            );
-            // Bed floor (dark grey)
-            let bed_floor = Vector3 { x: 0.0, y: 0.05, z: -1.0 };
-            d3.draw_model_ex(
-                &assets.plain_cube_model,
-                vadd(pos, rotate_vector(bed_floor, q)),
-                axis, angle_deg,
-                Vector3 { x: body_w * 0.9, y: 0.1, z: 2.6 },
-                Color::new(40, 40, 40, 255),
-            );
+            lighting.set_material_properties(0.8, 0.15, 1.0);
+            local_draw!(&assets.plain_cube_model, Vector3 { x: -body_w * 0.46, y: body_h * 0.5 + 0.35, z: -1.0 }, Vector3 { x: 0.1, y: 0.7, z: 2.6 }, body_color);
+            local_draw!(&assets.plain_cube_model, Vector3 { x: body_w * 0.46, y: body_h * 0.5 + 0.35, z: -1.0 }, Vector3 { x: 0.1, y: 0.7, z: 2.6 }, body_color);
+            local_draw!(&assets.plain_cube_model, Vector3 { x: 0.0, y: body_h * 0.5 + 0.35, z: -2.3 }, Vector3 { x: body_w * 0.9, y: 0.7, z: 0.1 }, body_color);
+            lighting.set_material_properties(0.1, 0.8, 0.2);
+            local_draw!(&assets.plain_cube_model, Vector3 { x: 0.0, y: 0.05, z: -1.0 }, Vector3 { x: body_w * 0.9, y: 0.1, z: 2.6 }, Color::new(40, 40, 40, 255));
         }
         _ => {}
     }
@@ -806,46 +1242,44 @@ pub fn draw_car(
     // 5. Draw Police Light Bar / Siren domes
     if kind == VehicleKind::Police {
         let bar_local = Vector3 { x: 0.0, y: cabin_offset_y + cabin_h * 0.5 + 0.05, z: cabin_offset_z };
-        let bar_world = vadd(pos, rotate_vector(bar_local, q));
-        d3.draw_model_ex(
+        
+        lighting.set_material_properties(0.1, 0.5, 0.5); // Plastic siren mount base
+        local_draw!(
             &assets.plain_cube_model,
-            bar_world,
-            axis, angle_deg,
+            bar_local,
             Vector3 { x: 1.2, y: 0.1, z: 0.25 },
-            Color::new(30, 30, 30, 255),
+            Color::new(30, 30, 30, 255)
         );
 
         let red_flash = (time * 12.0).sin() > 0.0;
         let left_color = if red_flash { Color::new(255, 30, 30, 255) } else { Color::new(50, 0, 0, 255) };
         let right_color = if !red_flash { Color::new(30, 30, 255, 255) } else { Color::new(0, 0, 50, 255) };
 
+        lighting.set_material_properties(0.0, 0.05, 1.5); // Glossy glowing siren dome glass
         let left_local = Vector3 { x: -0.35, y: cabin_offset_y + cabin_h * 0.5 + 0.15, z: cabin_offset_z };
-        d3.draw_model_ex(
-            &assets.plain_cube_model,
-            vadd(pos, rotate_vector(left_local, q)),
-            axis, angle_deg,
+        local_draw!(
+            &assets.sphere_model,
+            left_local,
             Vector3 { x: 0.3, y: 0.12, z: 0.2 },
-            left_color,
+            left_color
         );
 
         let right_local = Vector3 { x: 0.35, y: cabin_offset_y + cabin_h * 0.5 + 0.15, z: cabin_offset_z };
-        d3.draw_model_ex(
-            &assets.plain_cube_model,
-            vadd(pos, rotate_vector(right_local, q)),
-            axis, angle_deg,
+        local_draw!(
+            &assets.sphere_model,
+            right_local,
             Vector3 { x: 0.3, y: 0.12, z: 0.2 },
-            right_color,
+            right_color
         );
     }
 
-    // 6. Draw Wheels with metal rims
+    // 6. Draw Wheels with metal rims and spokes
     let (w_rad, w_width) = match variant {
         VehicleVariant::Sports => (0.38, 0.35),
         VehicleVariant::SUV => (0.52, 0.36),
         VehicleVariant::Pickup => (0.5, 0.34),
         VehicleVariant::Sedan => (0.4, 0.3),
     };
-    let w_offset = w_width * 0.5;
 
     let wheel_local_offsets = [
         Vector3 { x: body_w * 0.5, y: -body_h * 0.5, z: body_l * 0.32 },
@@ -853,63 +1287,147 @@ pub fn draw_car(
         Vector3 { x: body_w * 0.5, y: -body_h * 0.5, z: -body_l * 0.32 },
         Vector3 { x: -body_w * 0.5, y: -body_h * 0.5, z: -body_l * 0.32 },
     ];
-    let local_wheel_axis = Vector3 { x: 1.0, y: 0.0, z: 0.0 };
-    let world_wheel_axis = rotate_vector(local_wheel_axis, q);
+    
+    let q_wheel_rel = Quat {
+        w: (std::f32::consts::FRAC_PI_4).cos(),
+        x: 0.0,
+        y: 0.0,
+        z: (std::f32::consts::FRAC_PI_4).sin(),
+    };
+    let (w_axis, w_angle) = quat_to_axis_angle(q * q_wheel_rel);
 
     for off in wheel_local_offsets {
         let wheel_center = vadd(pos, rotate_vector(off, q));
-        let start = vsub(wheel_center, vscale(world_wheel_axis, w_offset));
-        let end = vadd(wheel_center, vscale(world_wheel_axis, w_offset));
         
-        // Draw black tire
-        d3.draw_cylinder_ex(
-            start, end,
-            w_rad, w_rad, 8,
+        // Draw black tire with tread texture
+        lighting.set_material_properties(0.0, 0.9, 0.1);
+        d3.draw_model_ex(
+            &assets.tire_model,
+            wheel_center,
+            w_axis, w_angle,
+            Vector3 { x: w_rad * 2.0, y: w_width, z: w_rad * 2.0 },
             Color::new(25, 25, 25, 255),
         );
 
-        // Draw metal rim inside the tire outer face
-        let rim_rad = w_rad * 0.55;
-        if off.x < 0.0 {
-            // Left wheel: outer face is start
-            let rim_start = start;
-            let rim_end = vadd(start, vscale(world_wheel_axis, 0.04));
-            d3.draw_cylinder_ex(rim_start, rim_end, rim_rad, rim_rad, 6, Color::new(170, 170, 175, 255));
+        // Draw metal rim inside the tire outer face (shiny metal chrome)
+        lighting.set_material_properties(0.9, 0.2, 1.2);
+        let rim_rad = w_rad * 0.65;
+        let rim_width = 0.04;
+        let rim_offset_dist = w_width * 0.5 - rim_width * 0.5;
+        let rim_center = if off.x < 0.0 {
+            vadd(wheel_center, rotate_vector(Vector3 { x: -rim_offset_dist, y: 0.0, z: 0.0 }, q))
         } else {
-            // Right wheel: outer face is end
-            let rim_start = vsub(end, vscale(world_wheel_axis, 0.04));
-            let rim_end = end;
-            d3.draw_cylinder_ex(rim_start, rim_end, rim_rad, rim_rad, 6, Color::new(170, 170, 175, 255));
+            vadd(wheel_center, rotate_vector(Vector3 { x: rim_offset_dist, y: 0.0, z: 0.0 }, q))
+        };
+        // Rim rotates around local axle (Y-axis of cylinder)
+        let q_rim_rot = Quat {
+            w: (wheel_rot * 0.5).cos(),
+            x: 0.0,
+            y: (wheel_rot * 0.5).sin(),
+            z: 0.0,
+        };
+        let q_rim = q * q_wheel_rel * q_rim_rot;
+        let (rim_axis, rim_angle) = quat_to_axis_angle(q_rim);
+        d3.draw_model_ex(
+            &assets.cylinder_model,
+            rim_center,
+            rim_axis, rim_angle,
+            Vector3 { x: rim_rad * 2.0, y: rim_width, z: rim_rad * 2.0 },
+            Color::new(200, 200, 205, 255),
+        );
+
+        // Draw red brake caliper (does not rotate with wheel, only with body q!)
+        lighting.set_material_properties(0.5, 0.3, 0.8); // painted brake caliper
+        let caliper_offset_local = if off.x < 0.0 {
+            Vector3 { x: -rim_offset_dist + 0.01, y: rim_rad * 0.6 * 0.707, z: -rim_rad * 0.6 * 0.707 }
+        } else {
+            Vector3 { x: rim_offset_dist - 0.01, y: rim_rad * 0.6 * 0.707, z: -rim_rad * 0.6 * 0.707 }
+        };
+        let caliper_world = vadd(wheel_center, rotate_vector(caliper_offset_local, q));
+        d3.draw_model_ex(
+            &assets.plain_cube_model,
+            caliper_world,
+            axis, angle_deg,
+            Vector3 { x: 0.03, y: rim_rad * 0.35, z: rim_rad * 0.45 },
+            Color::new(220, 20, 20, 255), // Brembo red!
+        );
+
+        // Draw 5 metal spokes inside the rim outer face
+        lighting.set_material_properties(0.95, 0.15, 1.3); // Chrome spokes
+        for i in 0..5 {
+            let angle_rad = (i as f32 * 72.0).to_radians() + wheel_rot;
+            let q_spoke_rel = Quat {
+                w: (angle_rad * 0.5).cos(),
+                x: 0.0,
+                y: (angle_rad * 0.5).sin(), // rotate around local cylinder Y-axis (axle)
+                z: 0.0,
+            };
+            
+            // Spoke extends along local X-axis. Center offset by half length.
+            let spoke_local = Vector3 { x: rim_rad * 0.4, y: 0.0, z: 0.0 };
+            let rotated_spoke_local = rotate_vector(spoke_local, q_spoke_rel);
+            let spoke_center = vadd(rim_center, rotate_vector(rotated_spoke_local, q * q_wheel_rel));
+            
+            let q_spoke = q * q_wheel_rel * q_spoke_rel;
+            let (sp_axis, sp_angle) = quat_to_axis_angle(q_spoke);
+            
+            d3.draw_model_ex(
+                &assets.plain_cube_model,
+                spoke_center,
+                sp_axis, sp_angle,
+                Vector3 { x: rim_rad * 0.8, y: 0.015, z: 0.035 }, // scale along spoke length (X), thin spoke thickness
+                Color::new(200, 200, 205, 255),
+            );
         }
     }
 
-    // 7. Headlights & Taillights (deform and flicker when damaged)
-    let mut light_offsets_color = [
-        (Vector3 { x: body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
-        (Vector3 { x: -body_w * 0.4, y: 0.0, z: body_l * 0.5 }, Color::new(255, 255, 200, 255)),
-        (Vector3 { x: body_w * 0.4, y: 0.1, z: -body_l * 0.5 }, Color::new(220, 30, 30, 255)),
-        (Vector3 { x: -body_w * 0.4, y: 0.1, z: -body_l * 0.5 }, Color::new(220, 30, 30, 255)),
-    ];
+    // 7. Headlights & Taillights (deform and flicker when damaged) - using sphere model for correct shader lighting!
+    let mut hl_left_off = Vector3 { x: -body_w * 0.38, y: -body_h * 0.12, z: body_l * 0.50 + 0.01 };
+    let mut hl_right_off = Vector3 { x: body_w * 0.38, y: -body_h * 0.12, z: body_l * 0.50 + 0.01 };
+    let mut tl_left_off = Vector3 { x: -body_w * 0.38, y: -body_h * 0.12, z: -body_l * 0.50 - 0.01 };
+    let mut tl_right_off = Vector3 { x: body_w * 0.38, y: -body_h * 0.12, z: -body_l * 0.50 - 0.01 };
+
     if damaged > 0.3 {
-        light_offsets_color[0].0.y -= damaged * 0.2; // left headlight droops
-        light_offsets_color[0].0.z -= damaged * 0.1;
-        light_offsets_color[1].0.y -= damaged * 0.15; // right headlight droops
-        light_offsets_color[1].0.x += damaged * 0.08;
-        light_offsets_color[2].0.y -= damaged * 0.1;  // left taillight skewed
-        light_offsets_color[3].0.y -= damaged * 0.12; // right taillight skewed
+        hl_left_off.y -= damaged * 0.2; // left headlight droops
+        hl_left_off.z -= damaged * 0.1;
+        hl_right_off.y -= damaged * 0.15; // right headlight droops
+        hl_right_off.x += damaged * 0.08;
+        tl_left_off.y -= damaged * 0.1;  // left taillight skewed
+        tl_right_off.y -= damaged * 0.12; // right taillight skewed
     }
-    for (off, col) in light_offsets_color {
-        let light_pos = vadd(pos, rotate_vector(off, q));
-        let is_headlight = off.z > 0.0;
-        // Flickers if heavily damaged
-        let show_light = !is_headlight || damaged < 0.7 || (time * 18.0).sin() > 0.0;
-        if show_light {
-            d3.draw_sphere(light_pos, 0.15, col);
-        }
+    
+    // Front Headlights
+    lighting.set_material_properties(0.0, 0.05, 1.5); // Shiny glass covers
+    let show_hl_left = damaged < 0.7 || (time * 18.0).sin() > 0.0;
+    if show_hl_left {
+        local_draw!(&assets.headlight_model, hl_left_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
     }
+    let show_hl_right = damaged < 0.8 || (time * 22.0).sin() > 0.0;
+    if show_hl_right {
+        local_draw!(&assets.headlight_model, hl_right_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
+    }
+
+    // Rear Taillights
+    local_draw!(&assets.taillight_model, tl_left_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
+    local_draw!(&assets.taillight_model, tl_right_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
+
+    // Front & Rear License Plates
+    local_draw!(
+        &assets.plate_model,
+        Vector3 { x: 0.0, y: -body_h * 0.3, z: body_l * 0.52 + 0.01 },
+        Vector3 { x: 0.45, y: 0.2, z: 0.02 },
+        Color::WHITE
+    );
+    local_draw!(
+        &assets.plate_model,
+        Vector3 { x: 0.0, y: -body_h * 0.3, z: -body_l * 0.52 - 0.01 },
+        Vector3 { x: 0.45, y: 0.2, z: 0.02 },
+        Color::WHITE
+    );
 
     // Damage smoke wires
     if damaged > 0.4 {
+        lighting.set_material_properties(0.0, 0.8, 0.2); // Non-metal rough soot/damage mesh
         d3.draw_model_wires_ex(
             &assets.plain_cube_model,
             pos,
@@ -918,6 +1436,9 @@ pub fn draw_car(
             Color::new(60, 40, 30, 255),
         );
     }
+
+    // Restore default material properties for other rendering in the frame
+    lighting.set_material_properties(0.0, 0.8, 0.15);
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

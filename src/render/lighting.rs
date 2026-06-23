@@ -28,6 +28,9 @@ pub struct LightingSystem {
     loc_window_glow: i32,
     loc_light_count: i32,
     loc_point_lights: [(i32, i32, i32); 6],
+    loc_metallic: i32,
+    loc_roughness: i32,
+    loc_specular: i32,
     // Cached uniform locations for depth shader.
     pub loc_depth_mvp: i32,
     // Current light space matrix (updated each frame).
@@ -90,6 +93,10 @@ impl LightingSystem {
             *item = (pos_loc, col_loc, rad_loc);
         }
 
+        let loc_metallic = lit_shader.get_shader_location("u_metallic");
+        let loc_roughness = lit_shader.get_shader_location("u_roughness");
+        let loc_specular = lit_shader.get_shader_location("u_specular");
+
         LightingSystem {
             lit_shader,
             depth_shader,
@@ -106,6 +113,9 @@ impl LightingSystem {
             loc_window_glow,
             loc_light_count,
             loc_point_lights,
+            loc_metallic,
+            loc_roughness,
+            loc_specular,
             loc_depth_mvp,
             light_space: Matrix::identity(),
         }
@@ -120,6 +130,20 @@ impl LightingSystem {
         assets.plain_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
         assets.carbon_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
         assets.grill_cube_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.cylinder_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.sphere_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.tire_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.headlight_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.taillight_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.plate_model.materials_mut()[0].set_shader(&self.lit_shader);
+        assets.dash_model.materials_mut()[0].set_shader(&self.lit_shader);
+    }
+
+    /// Update the custom material properties on the shader.
+    pub fn set_material_properties(&mut self, metallic: f32, roughness: f32, specular: f32) {
+        self.lit_shader.set_shader_value(self.loc_metallic, metallic);
+        self.lit_shader.set_shader_value(self.loc_roughness, roughness);
+        self.lit_shader.set_shader_value(self.loc_specular, specular);
     }
 
     /// Compute the light space matrix (view + projection) for shadow mapping.
@@ -226,6 +250,7 @@ impl LightingSystem {
             0.0
         };
         self.lit_shader.set_shader_value(self.loc_window_glow, window_glow);
+        self.set_material_properties(0.0, 0.8, 0.15);
     }
 
     /// Get the light space matrix (for use in draw functions if needed).

@@ -17,6 +17,10 @@ uniform sampler2D texture0;
 
 uniform float u_windowGlow;
 
+uniform float u_metallic;
+uniform float u_roughness;
+uniform float u_specular;
+
 uniform vec3 u_light0_pos;
 uniform vec3 u_light0_color;
 uniform float u_light0_radius;
@@ -66,6 +70,28 @@ float compute_shadow() {
     return currentDepth - bias < closestDepth ? 1.0 : 0.4;
 }
 
+void accumulatePointLight(
+    vec3 p_pos, vec3 p_color, float p_radius,
+    vec3 normal, vec3 fragWorldPos, vec3 viewDir,
+    vec3 baseColor, vec3 specColor, float activeSpecular, float shininess,
+    inout vec3 diffuseAccum, inout vec3 specularAccum
+) {
+    vec3 lToPos = p_pos - fragWorldPos;
+    float dist = length(lToPos);
+    if (dist < p_radius) {
+        float att = 1.0 - (dist / p_radius);
+        vec3 lDir = lToPos / dist;
+        
+        // Diffuse
+        diffuseAccum += p_color * baseColor * max(dot(normal, lDir), 0.0) * att * att;
+        
+        // Specular
+        vec3 halfDirPt = normalize(lDir + viewDir);
+        float specPt = pow(max(dot(normal, halfDirPt), 0.0), shininess);
+        specularAccum += p_color * specColor * activeSpecular * specPt * att * att;
+    }
+}
+
 void main() {
     vec4 texColor = texture(texture0, fragTexCoord);
     vec3 baseColor = texColor.rgb * fragColor.rgb;
@@ -83,71 +109,65 @@ void main() {
         lightDir = -u_lightDir / lightDirLen;
     }
 
+    // Building window emissive glow at night
+    // Yellow color in texture corresponds to RGB approx: r > 0.9, g > 0.8, b < 0.75.
+    bool isWindow = (texColor.r > 0.9 && texColor.g > 0.8 && texColor.b < 0.75);
+    
+    // Specular and metallic properties (override for building windows to make them glossy)
+    float activeMetallic = isWindow ? 0.0 : u_metallic;
+    float activeRoughness = isWindow ? 0.05 : u_roughness;
+    float activeSpecular = isWindow ? 1.0 : u_specular;
+
+    float shininess = 8.0 + (1.0 - activeRoughness) * 120.0;
+    vec3 specColor = mix(vec3(1.0), baseColor, activeMetallic);
+
+    // View direction
+    vec3 viewDir = vec3(0.0, 0.0, 1.0);
+    vec3 toCam = u_cameraPos - fragWorldPos;
+    float toCamLen = length(toCam);
+    if (toCamLen > 0.0001) {
+        viewDir = toCam / toCamLen;
+    }
+
     // Diffuse term with shadow attenuation
     float diff = max(dot(normal, lightDir), 0.0);
     float shadow = compute_shadow();
     vec3 diffuse = u_lightColor * baseColor * diff * shadow;
+
+    // Specular term for directional light
+    vec3 halfDir = normalize(lightDir + viewDir);
+    float spec = pow(max(dot(normal, halfDir), 0.0), shininess);
+    vec3 specular = u_lightColor * specColor * activeSpecular * spec * shadow;
 
     // Ambient term
     vec3 ambient = u_ambientColor * baseColor;
 
     // Point lights (up to 6)
     vec3 pointLightDiffuse = vec3(0.0);
+    vec3 pointLightSpecular = vec3(0.0);
     if (u_light_count >= 1) {
-        vec3 lToPos = u_light0_pos - fragWorldPos;
-        float dist = length(lToPos);
-        if (dist < u_light0_radius) {
-            float att = 1.0 - (dist / u_light0_radius);
-            pointLightDiffuse += u_light0_color * baseColor * max(dot(normal, normalize(lToPos)), 0.0) * att * att;
-        }
+        accumulatePointLight(u_light0_pos, u_light0_color, u_light0_radius, normal, fragWorldPos, viewDir, baseColor, specColor, activeSpecular, shininess, pointLightDiffuse, pointLightSpecular);
     }
     if (u_light_count >= 2) {
-        vec3 lToPos = u_light1_pos - fragWorldPos;
-        float dist = length(lToPos);
-        if (dist < u_light1_radius) {
-            float att = 1.0 - (dist / u_light1_radius);
-            pointLightDiffuse += u_light1_color * baseColor * max(dot(normal, normalize(lToPos)), 0.0) * att * att;
-        }
+        accumulatePointLight(u_light1_pos, u_light1_color, u_light1_radius, normal, fragWorldPos, viewDir, baseColor, specColor, activeSpecular, shininess, pointLightDiffuse, pointLightSpecular);
     }
     if (u_light_count >= 3) {
-        vec3 lToPos = u_light2_pos - fragWorldPos;
-        float dist = length(lToPos);
-        if (dist < u_light2_radius) {
-            float att = 1.0 - (dist / u_light2_radius);
-            pointLightDiffuse += u_light2_color * baseColor * max(dot(normal, normalize(lToPos)), 0.0) * att * att;
-        }
+        accumulatePointLight(u_light2_pos, u_light2_color, u_light2_radius, normal, fragWorldPos, viewDir, baseColor, specColor, activeSpecular, shininess, pointLightDiffuse, pointLightSpecular);
     }
     if (u_light_count >= 4) {
-        vec3 lToPos = u_light3_pos - fragWorldPos;
-        float dist = length(lToPos);
-        if (dist < u_light3_radius) {
-            float att = 1.0 - (dist / u_light3_radius);
-            pointLightDiffuse += u_light3_color * baseColor * max(dot(normal, normalize(lToPos)), 0.0) * att * att;
-        }
+        accumulatePointLight(u_light3_pos, u_light3_color, u_light3_radius, normal, fragWorldPos, viewDir, baseColor, specColor, activeSpecular, shininess, pointLightDiffuse, pointLightSpecular);
     }
     if (u_light_count >= 5) {
-        vec3 lToPos = u_light4_pos - fragWorldPos;
-        float dist = length(lToPos);
-        if (dist < u_light4_radius) {
-            float att = 1.0 - (dist / u_light4_radius);
-            pointLightDiffuse += u_light4_color * baseColor * max(dot(normal, normalize(lToPos)), 0.0) * att * att;
-        }
+        accumulatePointLight(u_light4_pos, u_light4_color, u_light4_radius, normal, fragWorldPos, viewDir, baseColor, specColor, activeSpecular, shininess, pointLightDiffuse, pointLightSpecular);
     }
     if (u_light_count >= 6) {
-        vec3 lToPos = u_light5_pos - fragWorldPos;
-        float dist = length(lToPos);
-        if (dist < u_light5_radius) {
-            float att = 1.0 - (dist / u_light5_radius);
-            pointLightDiffuse += u_light5_color * baseColor * max(dot(normal, normalize(lToPos)), 0.0) * att * att;
-        }
+        accumulatePointLight(u_light5_pos, u_light5_color, u_light5_radius, normal, fragWorldPos, viewDir, baseColor, specColor, activeSpecular, shininess, pointLightDiffuse, pointLightSpecular);
     }
 
-    // Final output combining ambient + diffuse + point light diffuse
-    vec3 lit = ambient + diffuse + pointLightDiffuse;
+    // Final output combining ambient + diffuse + specular + point light diffuse + point light specular
+    vec3 lit = ambient + diffuse + specular + pointLightDiffuse + pointLightSpecular;
 
     // Building window emissive glow at night
-    // Yellow color in texture corresponds to RGB approx: r > 0.9, g > 0.8, b < 0.75.
-    bool isWindow = (texColor.r > 0.9 && texColor.g > 0.8 && texColor.b < 0.75);
     if (isWindow) {
         vec3 windowColor = vec3(1.0, 0.9, 0.6);
         lit = mix(lit, windowColor, u_windowGlow);

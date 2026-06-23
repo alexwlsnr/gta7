@@ -1539,13 +1539,16 @@ impl<'a> Game<'a> {
                 let ry = v.render_yaw(alpha);
                 let rp_pitch = v.render_pitch(alpha);
                 let rp_roll = v.render_roll(alpha);
+                let rp_wheel_rot = v.render_wheel_rot(alpha);
                 draw_car(
                     &mut d3,
                     &self.assets,
+                    &mut self.lighting,
                     rp,
                     ry,
                     rp_pitch,
                     rp_roll,
+                    rp_wheel_rot,
                     v.color,
                     v.damage_level(),
                     v.kind,

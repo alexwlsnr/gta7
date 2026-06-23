@@ -38,6 +38,8 @@ pub struct Vehicle {
     pub variant: VehicleVariant,
     pub nitro: f32,
     pub nitro_active: bool,
+    pub wheel_rot: f32,
+    pub prev_wheel_rot: f32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -88,6 +90,8 @@ impl Vehicle {
             variant,
             nitro: 1.0,
             nitro_active: false,
+            wheel_rot: 0.0,
+            prev_wheel_rot: 0.0,
         }
     }
 
@@ -252,6 +256,22 @@ impl Vehicle {
                 crashed = true;
             }
         }
+
+        // Update wheel rotation
+        let wheel_radius = match self.variant {
+            VehicleVariant::Sports => 0.38,
+            VehicleVariant::SUV => 0.52,
+            VehicleVariant::Pickup => 0.5,
+            VehicleVariant::Sedan => 0.4,
+        };
+        let mut new_rot = self.wheel_rot + self.speed * dt / wheel_radius;
+        let tau = std::f32::consts::TAU;
+        new_rot = new_rot % tau;
+        if new_rot < 0.0 {
+            new_rot += tau;
+        }
+        self.wheel_rot = new_rot;
+
         crashed
     }
 
@@ -269,6 +289,21 @@ impl Vehicle {
         let push = city.resolve_circle_3d(self.pos.x, self.pos.y, self.pos.z, 1.5);
         self.pos.x += push.x;
         self.pos.z += push.z;
+
+        // Update wheel rotation for AI
+        let wheel_radius = match self.variant {
+            VehicleVariant::Sports => 0.38,
+            VehicleVariant::SUV => 0.52,
+            VehicleVariant::Pickup => 0.5,
+            VehicleVariant::Sedan => 0.4,
+        };
+        let mut new_rot = self.wheel_rot + self.speed * dt / wheel_radius;
+        let tau = std::f32::consts::TAU;
+        new_rot = new_rot % tau;
+        if new_rot < 0.0 {
+            new_rot += tau;
+        }
+        self.wheel_rot = new_rot;
     }
 
     pub fn take_damage(&mut self, dmg: f32) {
@@ -302,6 +337,7 @@ impl Vehicle {
         self.prev_yaw = self.yaw;
         self.prev_pitch = self.pitch;
         self.prev_roll = self.roll;
+        self.prev_wheel_rot = self.wheel_rot;
     }
 
     pub fn render_pos(&self, alpha: f32) -> Vector3 {
@@ -315,6 +351,9 @@ impl Vehicle {
     }
     pub fn render_roll(&self, alpha: f32) -> f32 {
         lerp(self.prev_roll, self.roll, alpha)
+    }
+    pub fn render_wheel_rot(&self, alpha: f32) -> f32 {
+        lerp_angle(self.prev_wheel_rot, self.wheel_rot, alpha)
     }
 
     pub fn damage_level(&self) -> f32 {
