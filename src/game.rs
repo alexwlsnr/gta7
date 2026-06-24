@@ -373,9 +373,13 @@ impl<'a> Game<'a> {
                 self.respawn_player();
             }
             // Still update camera and drain edges.
-            self.camera.update(
-                &self.player, &self.vehicles, 0.0, 0.0, self.cfg.mouse_sensitivity, dt,
-            );
+            if self.camera.is_free() {
+                self.camera.update_free(input, dt);
+            } else {
+                self.camera.update(
+                    &self.player, &self.vehicles, 0.0, 0.0, self.cfg.mouse_sensitivity, dt,
+                );
+            }
             input.drain_edges();
             return;
         }
@@ -736,14 +740,18 @@ impl<'a> Game<'a> {
         }
 
         // --- Camera ---
-        self.camera.update(
-            &self.player, &self.vehicles,
-            look_dx, look_dy,
-            self.cfg.mouse_sensitivity, dt,
-        );
-        // Sync player facing to camera yaw (camera is the rotation authority on foot).
-        if self.player.in_vehicle.is_none() {
-            self.player.yaw = self.camera.yaw;
+        if self.camera.is_free() {
+            self.camera.update_free(input, dt);
+        } else {
+            self.camera.update(
+                &self.player, &self.vehicles,
+                look_dx, look_dy,
+                self.cfg.mouse_sensitivity, dt,
+            );
+            // Sync player facing to camera yaw (camera is the rotation authority on foot).
+            if self.player.in_vehicle.is_none() {
+                self.player.yaw = self.camera.yaw;
+            }
         }
 
         // --- Shooting ---

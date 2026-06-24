@@ -4,6 +4,12 @@ use crate::mathx::*;
 use crate::player::Player;
 use crate::vehicle::Vehicle;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Follow,
+    Free,
+}
+
 pub struct FollowCamera {
     pub pos: Vector3,
     pub target: Vector3,
@@ -11,6 +17,82 @@ pub struct FollowCamera {
     pub pitch: f32,
     pub dist: f32,
     pub height: f32,
+    pub mode: Mode,
+}
+
+impl FollowCamera {
+    pub fn is_free(&self) -> bool {
+        matches!(self.mode, Mode::Free)
+    }
+
+    pub fn set_follow(&mut self) {
+        self.mode = Mode::Follow;
+    }
+
+    /// Place the camera in free-fly mode at `pos` looking along `(yaw, pitch)`.
+    /// Convention: yaw=0 -> forward=+Z, yaw=PI/2 -> forward=+X. Matches the
+    /// existing follow camera (which sits at pivot.z - dist*cos(yaw) at yaw=0).
+    pub fn set_free(&mut self, pos: Vector3, yaw: f32, pitch: f32) {
+        self.mode = Mode::Free;
+        self.pos = pos;
+        let cp = pitch.cos();
+        let sp = pitch.sin();
+        self.target = Vector3 {
+            x: pos.x + yaw.sin() * cp,
+            y: pos.y + sp,
+            z: pos.z + yaw.cos() * cp,
+        };
+        self.yaw = yaw;
+        self.pitch = pitch;
+    }
+
+    /// Free-fly input. `input` carries keyboard + mouse state.
+    /// `dt` is real time since the last update.
+    ///
+    /// Convention: yaw=0 -> forward=+Z, yaw=PI/2 -> forward=+X.
+    /// Forward on the XZ plane is `(sin(yaw), 0, cos(yaw))`; right is
+    /// `(cos(yaw), 0, -sin(yaw))`. Pitch is clamped to +/- 1.4 rad.
+    pub fn update_free(&mut self, input: &crate::input::Input, dt: f32) {
+        let speed = 8.0; // m/s
+        let rot_speed = 1.5; // rad/s
+
+        // Translation: WASD on horizontal plane relative to current yaw; E=up, Q=down.
+        // Input convention: move_y is -1..+1 forward/back; move_x is -1..+1 strafe.
+        let (mut mx, mut mz, mut my) = (0.0_f32, 0.0_f32, 0.0_f32);
+        if input.move_y > 0.0 { mz += 1.0; }
+        if input.move_y < 0.0 { mz -= 1.0; }
+        if input.move_x > 0.0 { mx += 1.0; }
+        if input.move_x < 0.0 { mx -= 1.0; }
+        if input.ascend  { my += 1.0; }
+        if input.descend { my -= 1.0; }
+
+        // Normalize to unit length so diagonal speed is bounded.
+        let len = (mx * mx + mz * mz + my * my).sqrt();
+        if len > 0.0 {
+            mx /= len; mz /= len; my /= len;
+        }
+
+        let sy = self.yaw.sin();
+        let cy = self.yaw.cos();
+        // pos += (mz * forward + mx * right) * speed * dt
+        self.pos.x += (sy * mz + cy * mx) * speed * dt;
+        self.pos.z += (cy * mz - sy * mx) * speed * dt;
+        self.pos.y += my * speed * dt;
+
+        // Yaw/pitch from mouse drag.
+        self.yaw   -= input.look_dx * rot_speed;
+        self.pitch += input.look_dy * rot_speed;
+        self.pitch = clamp(self.pitch, -1.4, 1.4);
+
+        // Update target so `forward()` and `to_camera3d()` work in free mode.
+        let cp = self.pitch.cos();
+        let sp = self.pitch.sin();
+        self.target = Vector3 {
+            x: self.pos.x + sy * cp,
+            y: self.pos.y + sp,
+            z: self.pos.z + cy * cp,
+        };
+    }
 }
 
 impl FollowCamera {
@@ -22,9 +104,11 @@ impl FollowCamera {
             pitch: 0.35,
             dist: 8.0,
             height: 3.0,
+            mode: Mode::Follow,
         }
     }
 }
+
 
 impl Default for FollowCamera {
     fn default() -> Self {
@@ -121,5 +205,34 @@ impl FollowCamera {
     /// Forward direction (for shooting / aiming).
     pub fn forward(&self) -> Vector3 {
         vnorm(vsub(self.target, self.pos))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::Input;
+
+    #[test]
+    fn free_mode_moves_on_w() {
+        let mut cam = FollowCamera::new();
+        cam.set_free(Vector3 { x: 0.0, y: 1.5, z: 0.0 }, 0.0, 0.0);
+        let before = cam.pos.z;
+        let mut input = Input::default();
+        input.move_y = 1.0; // W: forward
+        cam.update_free(&input, 0.1);
+        // yaw=0 -> +Z direction.
+        assert!(cam.pos.z > before, "forward should move +Z, got {} -> {}", before, cam.pos.z);
+    }
+
+    #[test]
+    fn free_mode_pitch_is_clamped() {
+        let mut cam = FollowCamera::new();
+        cam.set_free(Vector3 { x: 0.0, y: 1.5, z: 0.0 }, 0.0, 0.0);
+        let mut input = Input::default();
+        input.look_dy = 10.0;
+        for _ in 0..20 { cam.update_free(&input, 0.016); }
+        assert!(cam.pitch <= 1.4, "pitch must clamp at +1.4, got {}", cam.pitch);
+        assert!(cam.pitch >= -1.4, "pitch must clamp at -1.4, got {}", cam.pitch);
     }
 }

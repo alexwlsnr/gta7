@@ -15,6 +15,8 @@ pub struct Input {
     pub jump: bool,
     pub handbrake: bool,
     pub fire_held: bool,
+    pub ascend: bool,  // E (held)
+    pub descend: bool, // Q (held)
     // Edges (set when first pressed, cleared after a logic step consumes them)
     pub enter_exit: bool,
     pub reload: bool,
@@ -47,6 +49,8 @@ impl Input {
         i.jump = rl.is_key_down(KeyboardKey::KEY_SPACE);
         i.handbrake = rl.is_key_down(KeyboardKey::KEY_SPACE);
         i.fire_held = rl.is_mouse_button_down(MouseButton::MOUSE_BUTTON_LEFT);
+        i.ascend = rl.is_key_down(KeyboardKey::KEY_E);
+        i.descend = rl.is_key_down(KeyboardKey::KEY_Q);
         // Edges
         i.enter_exit = rl.is_key_pressed(KeyboardKey::KEY_F);
         i.reload = rl.is_key_pressed(KeyboardKey::KEY_R);
