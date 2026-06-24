@@ -1481,11 +1481,15 @@ impl<'a> Game<'a> {
         // remains as a safety net for any uncovered pixels.
         dt.clear_background(sky_bottom);
 
+        // Gather dynamic point lights. Player vehicle lights are stored
+        // separately so they can be prepended to the final list — the
+        // shader has only 6 point-light slots, and streetlights/sirens can
+        // outnumber that near an intersection, so without prioritization the
+        // player's headlights would be the first to get culled.
+        let mut gathered_lights: Vec<crate::render::lighting::PointLight> = Vec::new();
+        let mut vehicle_lights: Vec<crate::render::lighting::PointLight> = Vec::new();
 
-        // Gather dynamic point lights
-        let mut gathered_lights = Vec::new();
-
-        // 1. Player car lights
+        // 1. Player car lights (priority — always reach the shader)
         if let Some(pv) = self.player.in_vehicle {
             if let Some(v) = self.vehicles.get(pv) {
                 let p = v.render_pos(alpha);
@@ -1508,8 +1512,8 @@ impl<'a> Game<'a> {
                     z: (v.render_roll(alpha) * 0.5).sin(),
                 };
                 let q = q_yaw * q_pitch * q_roll;
-                
-                let (_body_w, _body_h, body_l) = match v.variant {
+
+                let (body_w, body_h, body_l) = match v.variant {
                     VehicleVariant::Sports => (2.05, 0.65, 4.3),
                     VehicleVariant::SUV => (2.2, 1.1, 4.4),
                     VehicleVariant::Pickup => (2.1, 0.9, 4.6),
@@ -1518,19 +1522,29 @@ impl<'a> Game<'a> {
 
                 let is_night = !(6.5..=18.5).contains(&total_hours);
                 if is_night {
-                    // Headlights point light: slightly in front of the vehicle
-                    let headlight_offset = Vector3 { x: 0.0, y: 0.0, z: body_l * 0.5 + 2.0 };
-                    let headlight_pos = vadd(p, crate::render::models::rotate_vector(headlight_offset, q));
-                    gathered_lights.push(crate::render::lighting::PointLight {
-                        pos: headlight_pos,
-                        color: Vector3 { x: 0.1, y: 1.6, z: 1.8 }, // neon cyan headlights
-                        radius: 20.0,
+                    // Two headlight point lights — one at each actual headlight
+                    // position (matching the model offsets in `draw_car`). Previously
+                    // there was a single light at the centerline which meant only
+                    // the middle of the car was lighting the road.
+                    let hl_left_offset = Vector3 { x: -body_w * 0.42, y: -body_h * 0.12, z: body_l * 0.50 + 0.02 };
+                    let hl_right_offset = Vector3 { x: body_w * 0.42, y: -body_h * 0.12, z: body_l * 0.50 + 0.02 };
+                    let hl_left_pos = vadd(p, crate::render::models::rotate_vector(hl_left_offset, q));
+                    let hl_right_pos = vadd(p, crate::render::models::rotate_vector(hl_right_offset, q));
+                    vehicle_lights.push(crate::render::lighting::PointLight {
+                        pos: hl_left_pos,
+                        color: Vector3 { x: 0.1, y: 1.6, z: 1.8 }, // neon cyan
+                        radius: 22.0,
+                    });
+                    vehicle_lights.push(crate::render::lighting::PointLight {
+                        pos: hl_right_pos,
+                        color: Vector3 { x: 0.1, y: 1.6, z: 1.8 }, // neon cyan
+                        radius: 22.0,
                     });
 
-                    // Taillights point light: slightly behind the vehicle
+                    // Taillight point light: slightly behind the vehicle
                     let taillight_offset = Vector3 { x: 0.0, y: 0.0, z: -body_l * 0.5 - 1.0 };
                     let taillight_pos = vadd(p, crate::render::models::rotate_vector(taillight_offset, q));
-                    gathered_lights.push(crate::render::lighting::PointLight {
+                    vehicle_lights.push(crate::render::lighting::PointLight {
                         pos: taillight_pos,
                         color: Vector3 { x: 1.8, y: 0.1, z: 1.2 }, // neon hot pink taillights
                         radius: 10.0,
@@ -1608,16 +1622,22 @@ impl<'a> Game<'a> {
             }
         }
 
-        // Sort all gathered lights by distance to the player
+        // Sort ambient (non-vehicle) lights by distance to the player. The
+        // closest `6 - vehicle_lights.len()` slots are kept; vehicle lights
+        // are then prepended so they always make it into the shader's 6-slot
+        // buffer, no matter how many streetlights are nearby.
         let ref_pos = play_pos;
         gathered_lights.sort_by(|a, b| {
             let da = (a.pos.x - ref_pos.x).powi(2) + (a.pos.y - ref_pos.y).powi(2) + (a.pos.z - ref_pos.z).powi(2);
             let db = (b.pos.x - ref_pos.x).powi(2) + (b.pos.y - ref_pos.y).powi(2) + (b.pos.z - ref_pos.z).powi(2);
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
-
-        // Pass closest 6 point lights to the shader
-        self.lighting.update_point_lights(&gathered_lights);
+        let ambient_budget = 6usize.saturating_sub(vehicle_lights.len());
+        let closest_ambient: Vec<_> = gathered_lights.into_iter().take(ambient_budget).collect();
+        // Vehicle lights first so they survive the shader's 6-slot cap.
+        let mut final_lights = vehicle_lights;
+        final_lights.extend(closest_ambient);
+        self.lighting.update_point_lights(&final_lights);
 
         // Update lit shader uniforms for this frame (sun direction, color, fog,
         // shadow matrix). Must happen before entering shader mode so the values
@@ -1997,16 +2017,41 @@ impl<'a> Game<'a> {
             "EXIT GAME"
         ];
 
-        // Navigate with UP/DOWN or W/S
+        // Keyboard navigation. UP/DOWN or W/S to move selection; ENTER/SPACE
+        // to confirm; number keys 1-4 to jump directly to a menu option; `0`
+        // is a test-only shortcut that skips both the title and the intro
+        // cutscene and jumps straight to the playing state (so headless
+        // testing or manual QA doesn't have to sit through the dialog).
         if d.is_key_pressed(KeyboardKey::KEY_UP) || d.is_key_pressed(KeyboardKey::KEY_W) {
-            if self.intro_dialog_idx == 0 {
-                self.intro_dialog_idx = menu_options.len() - 1;
+            self.intro_dialog_idx = if self.intro_dialog_idx == 0 {
+                menu_options.len() - 1
             } else {
-                self.intro_dialog_idx -= 1;
-            }
+                self.intro_dialog_idx - 1
+            };
         }
         if d.is_key_pressed(KeyboardKey::KEY_DOWN) || d.is_key_pressed(KeyboardKey::KEY_S) {
             self.intro_dialog_idx = (self.intro_dialog_idx + 1) % menu_options.len();
+        }
+        for n in 1..=menu_options.len() as i32 {
+            let key = match n {
+                1 => KeyboardKey::KEY_ONE,
+                2 => KeyboardKey::KEY_TWO,
+                3 => KeyboardKey::KEY_THREE,
+                4 => KeyboardKey::KEY_FOUR,
+                _ => continue,
+            };
+            if d.is_key_pressed(key) {
+                self.intro_dialog_idx = (n - 1) as usize;
+            }
+        }
+        // Test shortcut: `0` jumps to playing immediately (bypasses title +
+        // intro). Documents the player in the same state START STORY does,
+        // minus the dialog.
+        if d.is_key_pressed(KeyboardKey::KEY_ZERO) {
+            self.screen_state = ScreenState::Playing;
+            self.intro_timer = 0.0;
+            self.player.pos = Vector3 { x: 0.0, y: 0.0, z: 2.0 };
+            self.player.yaw = 0.0;
         }
 
         // Clamp in case index got corrupted
@@ -2064,8 +2109,16 @@ impl<'a> Game<'a> {
                     }
                     _ => {}
                 }
-            }
         }
+        // On-screen hint for keyboard navigation (only relevant when not hovering
+        // — the mouse interaction is already obvious from the cursor).
+        let hint = "[↑/↓] NAVIGATE  [ENTER] SELECT  [1-4] QUICK  [0] SKIP ALL";
+        let hint_w = d.measure_text(hint, 13);
+        let hint_x = (sw - hint_w) / 2;
+        let hint_y = menu_y + menu_h + 12;
+        d.draw_text(hint, hint_x, hint_y, 13, Color::new(150, 180, 200, 180));
+
+    }
     }
 
     fn render_intro_cutscene(&self, d: &mut RaylibDrawHandle) {

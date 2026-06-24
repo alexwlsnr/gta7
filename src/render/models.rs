@@ -1585,8 +1585,11 @@ pub fn draw_car(
     }
 
     // 7. Headlights & Taillights (deform and flicker when damaged) - using sphere model for correct shader lighting!
-    let mut hl_left_off = Vector3 { x: -body_w * 0.38, y: -body_h * 0.12, z: body_l * 0.50 + 0.01 };
-    let mut hl_right_off = Vector3 { x: body_w * 0.38, y: -body_h * 0.12, z: body_l * 0.50 + 0.01 };
+    // Headlights sit at the front corners — slightly more outward than before
+    // (0.42 vs 0.38) so the two lamps read as clearly distinct from any
+    // distance. Same Y/Z as before.
+    let mut hl_left_off = Vector3 { x: -body_w * 0.42, y: -body_h * 0.12, z: body_l * 0.50 + 0.02 };
+    let mut hl_right_off = Vector3 { x: body_w * 0.42, y: -body_h * 0.12, z: body_l * 0.50 + 0.02 };
     let mut tl_left_off = Vector3 { x: -body_w * 0.38, y: -body_h * 0.12, z: -body_l * 0.50 - 0.01 };
     let mut tl_right_off = Vector3 { x: body_w * 0.38, y: -body_h * 0.12, z: -body_l * 0.50 - 0.01 };
 
@@ -1598,17 +1601,19 @@ pub fn draw_car(
         tl_left_off.y -= damaged * 0.1;  // left taillight skewed
         tl_right_off.y -= damaged * 0.12; // right taillight skewed
     }
-    
-    // Front Headlights
+    // Front Headlights — bigger panels than before (0.32 x 0.26 x 0.05) so
+    // the two lamps read as distinct at game-play distance, not as one merged
+    // blob. Shiny glass cover material so the lit shader picks up the cyan bulb.
     lighting.set_material_properties(0.0, 0.05, 1.5); // Shiny glass covers
     let show_hl_left = damaged < 0.7 || (time * 18.0).sin() > 0.0;
     if show_hl_left {
-        local_draw!(&assets.headlight_model, hl_left_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
+        local_draw!(&assets.headlight_model, hl_left_off, Vector3 { x: 0.32, y: 0.26, z: 0.05 }, Color::WHITE);
     }
     let show_hl_right = damaged < 0.8 || (time * 22.0).sin() > 0.0;
     if show_hl_right {
-        local_draw!(&assets.headlight_model, hl_right_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
+        local_draw!(&assets.headlight_model, hl_right_off, Vector3 { x: 0.32, y: 0.26, z: 0.05 }, Color::WHITE);
     }
+
 
     // Rear Taillights
     local_draw!(&assets.taillight_model, tl_left_off, Vector3 { x: 0.24, y: 0.2, z: 0.02 }, Color::WHITE);
