@@ -61,7 +61,48 @@ pub struct PostFx {
     /// Cached god ray intensity (0..0.6), set per-frame via `set_god_rays`. Values
     /// below 0.01 short-circuit the shader pass entirely.
     god_ray_intensity: f32,
-
+    /// Screen-space reflection shader. Simplified first pass: no depth texture
+    /// (raylib's `load_render_texture` creates a depth renderbuffer, not a
+    /// sampleable texture). Uses a 24-step screen-space vertical march with
+    /// color-based sky detection and a Sobel-like normal estimate. Skipped
+    /// entirely when `ssr_wetness < 0.01`.
+    ssr_shader: Shader,
+    /// Full-res scratch FBO for the SSR pass. Read from `output_fbo`, written
+    /// to `ssr_fbo`, then blitted back to `output_fbo`. We need a separate
+    /// FBO because `begin_texture_mode` mutably borrows its target and we
+    /// can't read+write `output_fbo` in the same pass (mirrors the CRT and
+    /// god_rays patterns).
+    ssr_fbo: RenderTexture2D,
+    /// `u_wetness` uniform location — 0 disables the pass entirely.
+    loc_ssr_wetness: i32,
+    /// `u_resolution` uniform location — texel size for the Sobel kernel.
+    loc_ssr_resolution: i32,
+    /// `u_proj` uniform location — projection matrix. Reserved for a future
+    /// depth-texture upgrade; not currently used by the simplified shader.
+    #[allow(dead_code)]
+    loc_ssr_proj: i32,
+    /// `u_invViewProj` uniform location — inverse view-projection. Reserved
+    /// for the depth-texture upgrade.
+    #[allow(dead_code)]
+    loc_ssr_inv_view_proj: i32,
+    /// `u_cameraPos` uniform location — world-space camera position. Reserved
+    /// for the depth-texture upgrade.
+    #[allow(dead_code)]
+    loc_ssr_camera_pos: i32,
+    /// Cached wetness scalar (0..0.8), set per-frame via `set_ssr_data`.
+    /// Below 0.01 the SSR pass is short-circuited.
+    ssr_wetness: f32,
+    /// Cached projection matrix, set per-frame. Currently unused by the
+    /// simplified shader but stored for a future depth-texture pass.
+    #[allow(dead_code)]
+    ssr_proj: Matrix,
+    /// Cached inverse view-projection matrix, set per-frame. Currently unused
+    /// by the simplified shader.
+    #[allow(dead_code)]
+    ssr_inv_view_proj: Matrix,
+    /// Cached world-space camera position, set per-frame. Currently unused.
+    #[allow(dead_code)]
+    ssr_camera_pos: Vector3,
     width: i32,
     height: i32,
     half_width: i32,
@@ -84,9 +125,6 @@ impl PostFx {
             rl.load_render_texture(thread, half_width as u32, half_height as u32)
                 .unwrap(),
         ];
-        let output_fbo = rl
-            .load_render_texture(thread, width as u32, height as u32)
-            .unwrap();
 
         // Bilinear filtering on every intermediate target so downsampling and
         // blur ping-pongs sample smoothly.
@@ -97,7 +135,18 @@ impl PostFx {
             bf.texture()
                 .set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
         }
+        let output_fbo = rl
+            .load_render_texture(thread, width as u32, height as u32)
+            .unwrap();
+        // Full-res scratch FBO for the SSR pass. Created once at load and
+        // recreated in `resize_if_needed` when the window resizes.
+        let ssr_fbo = rl
+            .load_render_texture(thread, width as u32, height as u32)
+            .unwrap();
         output_fbo
+            .texture()
+            .set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+        ssr_fbo
             .texture()
             .set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
 
@@ -138,6 +187,13 @@ impl PostFx {
             let s = rl.load_shader(thread, None, Some("assets/shaders/god_rays.fs"));
             if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
         };
+        // SSR shader: 24-step screen-space vertical march with color-based
+        // sky detection and a Sobel-like normal estimate. Passthrough
+        // fallback if the file is missing or fails to compile.
+        let mut ssr_shader = {
+            let s = rl.load_shader(thread, None, Some("assets/shaders/ssr.fs"));
+            if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
+        };
 
         // Cache uniform locations (-1 = not found / inactive).
         let loc_threshold = bright_shader.get_shader_location("u_threshold");
@@ -152,6 +208,15 @@ impl PostFx {
         let loc_star_alpha = sky_shader.get_shader_location("u_starAlpha");
         let loc_gr_sun_pos = god_rays_shader.get_shader_location("u_sunScreenPos");
         let loc_gr_intensity = god_rays_shader.get_shader_location("u_intensity");
+        // SSR uniforms. `u_wetness` and `u_resolution` are the only ones the
+        // simplified shader actually reads; `u_proj` / `u_invViewProj` /
+        // `u_cameraPos` locations are cached so a future depth-texture
+        // upgrade can upload them without re-querying the shader.
+        let loc_ssr_wetness = ssr_shader.get_shader_location("u_wetness");
+        let loc_ssr_resolution = ssr_shader.get_shader_location("u_resolution");
+        let loc_ssr_proj = ssr_shader.get_shader_location("u_proj");
+        let loc_ssr_inv_view_proj = ssr_shader.get_shader_location("u_invViewProj");
+        let loc_ssr_camera_pos = ssr_shader.get_shader_location("u_cameraPos");
 
         // Default uniform values.
         bright_shader.set_shader_value(loc_threshold, 0.85f32);
@@ -159,6 +224,13 @@ impl PostFx {
         bloom_shader.set_shader_value(loc_bloom_strength, 0.4f32);
         crt_shader.set_shader_value(
             loc_crt_resolution,
+            Vector2::new(width as f32, height as f32),
+        );
+        // SSR defaults. Wetness is updated per-frame via `set_ssr_data`;
+        // resolution is fixed at load (Texel size only changes on resize).
+        ssr_shader.set_shader_value(loc_ssr_wetness, 0.0f32);
+        ssr_shader.set_shader_value(
+            loc_ssr_resolution,
             Vector2::new(width as f32, height as f32),
         );
 
@@ -187,6 +259,17 @@ impl PostFx {
             loc_gr_intensity,
             sun_screen_pos: Vector2::new(0.5, 0.5),
             god_ray_intensity: 0.0,
+            ssr_shader,
+            ssr_fbo,
+            loc_ssr_wetness,
+            loc_ssr_resolution,
+            loc_ssr_proj,
+            loc_ssr_inv_view_proj,
+            loc_ssr_camera_pos,
+            ssr_wetness: 0.0,
+            ssr_proj: Matrix::identity(),
+            ssr_inv_view_proj: Matrix::identity(),
+            ssr_camera_pos: Vector3::new(0.0, 0.0, 0.0),
             width,
             height,
             half_width,
@@ -218,6 +301,30 @@ impl PostFx {
     pub fn set_god_rays(&mut self, sun_pos: Vector2, intensity: f32) {
         self.sun_screen_pos = sun_pos;
         self.god_ray_intensity = intensity;
+    }
+
+    /// Set the SSR inputs for the current frame: camera projection matrix,
+    /// inverse view-projection, world-space camera position, and a wetness
+    /// scalar (0 = no reflection / daytime, 0.8 = full nighttime). Call this
+    /// BEFORE `process()` so the values are cached when the SSR pass runs.
+    /// The pass is short-circuited entirely when `wetness < 0.01`, so it's
+    /// effectively free during the day.
+    ///
+    /// `proj`, `inv_view_proj`, and `camera_pos` are currently unused by the
+    /// simplified shader (no depth texture), but are stored so a future
+    /// depth-texture upgrade can upload them without re-querying the shader.
+    pub fn set_ssr_data(
+        &mut self,
+        proj: Matrix,
+        inv_view_proj: Matrix,
+        camera_pos: Vector3,
+        wetness: f32,
+    ) {
+        self.ssr_proj = proj;
+        self.ssr_inv_view_proj = inv_view_proj;
+        self.ssr_camera_pos = camera_pos;
+        self.ssr_wetness = wetness;
+        self.ssr_shader.set_shader_value(self.loc_ssr_wetness, wetness);
     }
 
     /// Borrow the sky shader for `begin_shader_mode` around the sky dome draw.
@@ -383,6 +490,58 @@ impl PostFx {
                     Color::WHITE,
                 );
             }
+            // Blit scene_fbo (god ray result) back to output_fbo without a shader.
+            let scene_tex = self.scene_fbo.texture().clone();
+            {
+                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+                ot.draw_texture_pro(
+                    scene_tex,
+                    full_src,
+                    full_dst,
+                    Vector2::zero(),
+                    0.0,
+                    Color::WHITE,
+                );
+            }
+        }
+        // Pass 4c: SSR (output_fbo -> ssr_fbo -> output_fbo).
+        // 24-step screen-space vertical march that mixes a small fraction of
+        // the colors above each pixel back into the base, weighted by
+        // `ssr_wetness`. Skipped entirely when wetness is below 0.01 so the
+        // day-time path is a no-op. Uses `ssr_fbo` as the scratch target so
+        // we don't conflict with the CRT pass's `scene_fbo` scratch usage.
+        if self.ssr_wetness > 0.01 {
+            // Snapshot output_fbo's texture so the borrow ends before we
+            // mutably borrow ssr_fbo (same pattern as the god_rays pass).
+            let output_tex = self.output_fbo.texture().clone();
+            {
+                let mut st = rl.begin_texture_mode(thread, &mut self.ssr_fbo);
+                st.clear_background(Color::BLACK);
+                {
+                    let mut ss = st.begin_shader_mode(&mut self.ssr_shader);
+                    ss.draw_texture_pro(
+                        output_tex,
+                        full_src,
+                        full_dst,
+                        Vector2::zero(),
+                        0.0,
+                        Color::WHITE,
+                    );
+                }
+            }
+            // Blit ssr_fbo (SSR result) back to output_fbo without a shader.
+            let ssr_tex = self.ssr_fbo.texture().clone();
+            {
+                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+                ot.draw_texture_pro(
+                    ssr_tex,
+                    full_src,
+                    full_dst,
+                    Vector2::zero(),
+                    0.0,
+                    Color::WHITE,
+                );
+            }
         }
         // Pass 5: CRT post filter (output_fbo -> scene_fbo temp -> output_fbo).
         // `begin_texture_mode` borrows the destination FBO mutably, so we can't
@@ -486,6 +645,19 @@ impl PostFx {
             self.output_fbo
                 .texture()
                 .set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+            // SSR scratch FBO matches output_fbo's resolution (full-res).
+            self.ssr_fbo = rl
+                .load_render_texture(thread, screen_w as u32, screen_h as u32)
+                .unwrap();
+            self.ssr_fbo
+                .texture()
+                .set_texture_filter(thread, TextureFilter::TEXTURE_FILTER_BILINEAR);
+            // Update the resolution uniform so the Sobel kernel uses the
+            // correct texel size for the new dimensions.
+            self.ssr_shader.set_shader_value(
+                self.loc_ssr_resolution,
+                Vector2::new(screen_w as f32, screen_h as f32),
+            );
 
             self.width = screen_w;
             self.height = screen_h;

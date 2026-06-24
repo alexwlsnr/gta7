@@ -1403,6 +1403,34 @@ impl<'a> Game<'a> {
         let gr_intensity = crate::config::god_ray_intensity(total_hours);
         self.postfx.set_god_rays(sun_uv, gr_intensity);
 
+        // --- SSR Inputs ---
+        // Compute camera view/projection and the day's wetness scalar for the
+        // screen-space reflections pass. The matrices are unused by the
+        // current simplified shader (no depth texture), but the contract
+        // requires they be set so a future depth-texture upgrade can plug
+        // straight in. Wetness is the only input the shader actually
+        // consumes: 0.8 at night (full neon reflection), 0.4 at dawn/dusk
+        // (light reflection), 0.0 during the day (no effect).
+        let screen_w = rl.get_screen_width() as f32;
+        let screen_h = rl.get_screen_height() as f32;
+        let view = Matrix::look_at(cam.position, cam.target, cam.up);
+        let proj = Matrix::perspective(
+            cam.fovy as f64 * std::f64::consts::PI / 180.0,
+            screen_w as f64 / screen_h as f64,
+            0.01,
+            1000.0,
+        );
+        let view_proj = proj * view;
+        let inv_view_proj = view_proj.invert();
+        let wetness = if !(6.0..=20.0).contains(&total_hours) {
+            0.8
+        } else if !(8.0..=18.0).contains(&total_hours) {
+            0.4
+        } else {
+            0.0
+        };
+        self.postfx.set_ssr_data(proj, inv_view_proj, cam_pos, wetness);
+
         // --- Scene Pass (offscreen FBO) ---
         // Render the 3D world into the PostFx scene render texture. The FBO
         // matches the window size (1280×720), so this is a pure indirection
