@@ -1396,6 +1396,8 @@ impl<'a> Game<'a> {
         // Scoped so the texture-mode guard (`dt`) drops before the screen pass
         // borrows `rl` for `begin_drawing` — `begin_texture_mode` and
         // `begin_drawing` both hold `&mut rl`.
+        // Resize the scene FBO if the window size changed (e.g. fullscreen toggle).
+        self.postfx.resize_if_needed(rl, thread, rl.get_screen_width(), rl.get_screen_height());
         {
         let mut dt = rl.begin_texture_mode(thread, &mut self.postfx.scene_fbo);
         // Clear color + depth buffer (depth clear is essential — without it 3D
