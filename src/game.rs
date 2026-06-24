@@ -1768,13 +1768,17 @@ impl<'a> Game<'a> {
         }
         } // end scene FBO pass (drops `dt`)
 
+        // --- Post-Processing Passes ---
+        // Run the bloom pipeline (bright extract -> blur -> composite) into the
+        // PostFx output FBO. This needs `&mut rl` for `begin_texture_mode`, so it
+        // must complete before `begin_drawing` borrows `rl`.
+        self.postfx.process(rl, thread);
+
         // --- Blit + HUD Pass (screen) ---
-        // Composite the scene FBO to the default framebuffer, then draw the
-        // HUD/overlays on top. The blit is a 1:1 fullscreen copy (negative
-        // source height flips the FBO texture right-side up), so the result is
-        // visually identical to rendering 3D directly to screen.
+        // Composite the processed output FBO to the default framebuffer (negative
+        // source height flips the FBO texture right-side up), then draw HUD on top.
         let mut d = rl.begin_drawing(thread);
-        self.postfx.apply(&mut d);
+        self.postfx.blit(&mut d);
 
         if self.screen_state == ScreenState::Playing {
             let cam_pos = self.camera.pos;
