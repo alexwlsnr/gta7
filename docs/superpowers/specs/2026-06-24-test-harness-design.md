@@ -195,6 +195,31 @@ no-ops outside test mode.
 - Visual: capture screenshots from each preset and review. Stored in
   `screenshots/` (gitignored).
 
+## Usage Examples
+
+```bash
+# Default headlight closeup, interactive
+cargo run --release -- --test --scene=headlight_closeup
+
+# Take a screenshot of the parking lot at dusk
+cargo run --release -- --test --scene=parking_lot --time=19.5 \
+    --screenshot=/tmp/parking_lot.png
+
+# Reproduce the night-smearing bug, CRT off, see raw scene
+cargo run --release -- --test --scene=headlight_closeup --disable=crt
+
+# Drive around in the dark with 4 traffic cars ahead
+cargo run --release -- --test --scene=night_street --cars=4
+```
+
+> **Note on `--screenshot` paths:** raylib 6.0's `TakeScreenshot`
+> binding prepends the current working directory to whatever path you
+> pass, so absolute paths like `/tmp/foo.png` get mangled into
+> `/cwd/tmp/foo.png` and the write silently fails. Use a relative path
+> (`--screenshot=out.png`, `--screenshot=screenshots/foo.png`) or
+> `cd` into the target directory before invoking `cargo run`. The
+> `screenshots/` directory is created on demand by the harness.
+
 ## Risks & Open Questions
 
 - **Free camera collision:** the free camera in `Free` mode should not
