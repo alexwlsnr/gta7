@@ -99,9 +99,9 @@ impl PostFx {
         let loc_bloom_bloom = bloom_shader.get_shader_location("texture1");
 
         // Default uniform values.
-        bright_shader.set_shader_value(loc_threshold, 0.7f32);
-        bright_shader.set_shader_value(loc_soft_knee, 0.3f32);
-        bloom_shader.set_shader_value(loc_bloom_strength, 1.2f32);
+        bright_shader.set_shader_value(loc_threshold, 0.85f32);
+        bright_shader.set_shader_value(loc_soft_knee, 0.15f32);
+        bloom_shader.set_shader_value(loc_bloom_strength, 0.4f32);
 
         Self {
             scene_fbo,

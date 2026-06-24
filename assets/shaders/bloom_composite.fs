@@ -11,6 +11,7 @@ void main() {
     vec3 scene = texture(texture0, fragTexCoord).rgb;
     vec3 bloom = texture(texture1, fragTexCoord).rgb;
     vec3 result = scene + bloom * u_bloomStrength;
-    result = result / (1.0 + result * 0.3);
+    // Reinhard tone mapping to prevent blowout
+    result = result / (1.0 + result);
     finalColor = vec4(result, 1.0);
 }
