@@ -111,6 +111,7 @@ pub struct Game<'a> {
     pub pending_fullscreen: bool,
     pub sfx: crate::sound::SoundEffects<'a>,
     pub lighting: crate::render::lighting::LightingSystem,
+    pub postfx: crate::render::postfx::PostFx,
     pub screen_state: ScreenState,
     pub intro_dialog_idx: usize,
     pub intro_timer: f32,
@@ -126,6 +127,7 @@ impl<'a> Game<'a> {
 
         let lighting = crate::render::lighting::LightingSystem::load(rl, thread);
         lighting.apply_to_materials(&mut assets);
+        let postfx = crate::render::postfx::PostFx::load(rl, thread, 1280, 720);
         sfx.start_radio();
 
         // Player at center on a road.
@@ -248,6 +250,7 @@ impl<'a> Game<'a> {
             quit: false,
             pending_fullscreen: false,
             lighting,
+            postfx,
             sfx,
             screen_state: ScreenState::Title,
             intro_dialog_idx: 0,
@@ -1385,14 +1388,23 @@ impl<'a> Game<'a> {
             }
         }
 
-        let mut d = rl.begin_drawing(thread);
+        // --- Scene Pass (offscreen FBO) ---
+        // Render the 3D world into the PostFx scene render texture. The FBO
+        // matches the window size (1280×720), so this is a pure indirection
+        // with no visual change — it establishes the post-processing pipeline
+        // that later tasks will chain fullscreen shader passes onto.
+        // Scoped so the texture-mode guard (`dt`) drops before the screen pass
+        // borrows `rl` for `begin_drawing` — `begin_texture_mode` and
+        // `begin_drawing` both hold `&mut rl`.
+        {
+        let mut dt = rl.begin_texture_mode(thread, &mut self.postfx.scene_fbo);
         // Clear color + depth buffer (depth clear is essential — without it 3D
         // geometry fails the depth test against stale values and renders nothing).
         // Day/night sky colors computed from game time (total_hours set above
         // for the shadow pass).
         let (sky_top, sky_bottom) = crate::config::sky_colors_for_hour(total_hours);
-        d.clear_background(sky_bottom);
-        let sh = d.get_screen_height();
+        dt.clear_background(sky_bottom);
+        let sh = dt.get_screen_height();
         for y in (0..sh).step_by(2) {
             let t = y as f32 / sh as f32;
             let c = Color::new(
@@ -1401,7 +1413,7 @@ impl<'a> Game<'a> {
                 (sky_top.b as f32 + (sky_bottom.b as f32 - sky_top.b as f32) * t) as u8,
                 255,
             );
-            d.draw_rectangle(0, y, d.get_screen_width(), 2, c);
+            dt.draw_rectangle(0, y, dt.get_screen_width(), 2, c);
         }
 
         // Gather dynamic point lights
@@ -1548,7 +1560,7 @@ impl<'a> Game<'a> {
         // 3D scene. Models with the lit shader set on their materials will
         // use it automatically. Immediate-mode draws use raylib's default.
         {
-            let mut d3 = d.begin_mode3D(cam);
+            let mut d3 = dt.begin_mode3D(cam);
 
             // Draw the giant Vaporwave Sun on the horizon
             {
@@ -1752,8 +1764,16 @@ impl<'a> Game<'a> {
                 self.fx.draw(&mut d3);
             }
         }
+        } // end scene FBO pass (drops `dt`)
 
-        // HUD (2D).
+        // --- Blit + HUD Pass (screen) ---
+        // Composite the scene FBO to the default framebuffer, then draw the
+        // HUD/overlays on top. The blit is a 1:1 fullscreen copy (negative
+        // source height flips the FBO texture right-side up), so the result is
+        // visually identical to rendering 3D directly to screen.
+        let mut d = rl.begin_drawing(thread);
+        self.postfx.apply(&mut d);
+
         if self.screen_state == ScreenState::Playing {
             let cam_pos = self.camera.pos;
             let cam_yaw = self.camera.yaw;
