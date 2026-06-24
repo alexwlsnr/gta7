@@ -89,8 +89,14 @@ impl Fx {
     }
 
     pub fn explosion(&mut self, pos: Vector3) {
-        self.burst(pos, 40, 6.0, Color::new(255, 160, 40, 255), 0.8, 4.0);
-        self.burst(pos, 20, 3.0, Color::new(80, 80, 80, 255), 1.4, 1.0);
+        // Primary fireball
+        self.burst(pos, 50, 7.0, Color::new(255, 180, 40, 255), 0.9, 4.0);
+        // Hot white-yellow core
+        self.burst(pos, 15, 3.0, Color::new(255, 255, 200, 255), 0.4, 2.0);
+        // Dark billowing smoke
+        self.burst(pos, 30, 3.5, Color::new(60, 55, 50, 200), 1.8, 0.5);
+        // Ember sparks (high gravity, long life)
+        self.burst(pos, 20, 10.0, Color::new(255, 120, 20, 255), 1.5, 8.0);
     }
 
     pub fn muzzle(&mut self, pos: Vector3) {
@@ -127,11 +133,13 @@ impl Fx {
     }
 
     pub fn draw(&self, d3: &mut impl RaylibDraw3D) {
-        // Particles as small cubes.
+        // Particles as small cubes that grow as they fade (smoke expansion).
         for p in &self.particles {
-            let a = (p.life / p.max_life).clamp(0.0, 1.0);
-            let c = Color::new(p.color.r, p.color.g, p.color.b, (255.0 * a) as u8);
-            d3.draw_cube(p.pos, p.size, p.size, p.size, c);
+            let t = 1.0 - (p.life / p.max_life).clamp(0.0, 1.0); // 0 = fresh, 1 = dying
+            let a = (1.0 - t * t).clamp(0.0, 1.0); // quadratic fade-out
+            let grow = p.size * (1.0 + t * 1.5); // particles expand over time
+            let c = Color::new(p.color.r, p.color.g, p.color.b, (p.color.a as f32 * a) as u8);
+            d3.draw_cube(p.pos, grow, grow, grow, c);
         }
         // Tracers as bright lines.
         for t in &self.tracers {
@@ -139,9 +147,11 @@ impl Fx {
             let c = Color::new(255, 240, 160, (200.0 * a) as u8);
             d3.draw_line3D(t.from, t.to, c);
         }
-        // Muzzle flashes as bright spheres.
+        // Muzzle flashes as bright spheres with outer halo.
         for f in &self.flashes {
-            d3.draw_sphere(f.pos, 0.18, Color::new(255, 240, 180, 220));
+            let intensity = (f.life / 0.05).clamp(0.0, 1.0);
+            d3.draw_sphere(f.pos, 0.18 * intensity, Color::new(255, 240, 180, 220));
+            d3.draw_sphere(f.pos, 0.35 * intensity, Color::new(255, 200, 100, 80));
         }
         // Skidmarks as flat quads (made of two triangles).
         for s in &self.skidmarks {

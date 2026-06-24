@@ -161,9 +161,9 @@ impl<'a> Game<'a> {
                 z: angle.sin() * 4.5,
             };
             let colors = [
-                Color::new(200, 60, 60, 255),
-                Color::new(60, 120, 200, 255),
-                Color::new(220, 220, 220, 255),
+                Color::new(255, 20, 147, 255), // Neon pink
+                Color::new(0, 240, 255, 255),   // Neon cyan
+                Color::new(180, 0, 255, 255),   // Neon purple
             ];
             vehicles.push(Vehicle::new(pos, angle, colors[i], VehicleKind::Civilian));
         }
@@ -179,11 +179,11 @@ impl<'a> Game<'a> {
         // Spawn pedestrians.
         let mut peds = Vec::new();
         let ped_colors = [
-            Color::new(180, 120, 80, 255),
-            Color::new(120, 160, 180, 255),
-            Color::new(200, 180, 100, 255),
-            Color::new(160, 100, 160, 255),
-            Color::new(100, 200, 120, 255),
+            Color::new(255, 20, 147, 255), // Neon pink
+            Color::new(0, 240, 255, 255),   // Neon cyan
+            Color::new(180, 0, 255, 255),   // Neon purple
+            Color::new(50, 255, 50, 255),   // Neon lime green
+            Color::new(255, 110, 0, 255),   // Laser orange
         ];
         for _ in 0..cfg.max_peds {
             let (pos, _axis) = city.nearest_sidewalk(
@@ -411,12 +411,14 @@ impl<'a> Game<'a> {
                     if is_traffic {
                         had_driver = true;
                         let car = &self.vehicles[vi];
-                        let col = Color::new(
-                            100 + (rand::random::<u32>() % 120) as u8,
-                            100 + (rand::random::<u32>() % 120) as u8,
-                            100 + (rand::random::<u32>() % 120) as u8,
-                            255,
-                        );
+                        let ped_colors = [
+                            Color::new(255, 20, 147, 255),
+                            Color::new(0, 240, 255, 255),
+                            Color::new(180, 0, 255, 255),
+                            Color::new(50, 255, 50, 255),
+                            Color::new(255, 110, 0, 255),
+                        ];
+                        let col = ped_colors[rand::random::<usize>() % ped_colors.len()];
                         // Spawn a pedestrian driver getting thrown out
                         let mut ped = Ped::new(car.pos, col);
                         ped.state = crate::ai::ped::PedState::Dead;
@@ -529,6 +531,42 @@ impl<'a> Game<'a> {
             let prev_wr_pos = vadd(self.vehicles[vi].pos, crate::render::models::rotate_vector(wr_local, prev_q));
 
             let crashed = self.vehicles[vi].update_driven(input, &self.city, &self.cfg, dt);
+            // Nitro exhaust flames
+            if self.vehicles[vi].nitro_active {
+                let v = &self.vehicles[vi];
+                let fwd = crate::mathx::dir_from_yaw(v.yaw);
+                let exhaust_pos = Vector3 {
+                    x: v.pos.x - fwd.x * 2.5,
+                    y: v.pos.y + 0.3,
+                    z: v.pos.z - fwd.z * 2.5,
+                };
+                self.fx.burst(
+                    exhaust_pos, 3, 4.0,
+                    Color::new(0, 255, 255, 220), 0.25, 2.0, // Neon cyan flame
+                );
+                // Hot violet inner flame
+                self.fx.burst(
+                    exhaust_pos, 1, 2.5,
+                    Color::new(180, 0, 255, 240), 0.15, 1.5,
+                );
+            }
+            // Handbrake drift smoke
+            if input.handbrake && self.vehicles[vi].speed.abs() > 3.0 {
+                let v = &self.vehicles[vi];
+                let fwd = crate::mathx::dir_from_yaw(v.yaw);
+                let right = Vector3 { x: -fwd.z, y: 0.0, z: fwd.x };
+                for side in [-1.0f32, 1.0] {
+                    let tire_pos = Vector3 {
+                        x: v.pos.x - fwd.x * 1.8 + right.x * side * 0.9,
+                        y: v.pos.y + 0.1,
+                        z: v.pos.z - fwd.z * 1.8 + right.z * side * 0.9,
+                    };
+                    self.fx.burst(
+                        tire_pos, 2, 1.5,
+                        Color::new(255, 20, 147, 180), 0.6, 0.5, // Hot pink drift smoke!
+                    );
+                }
+            }
             if crashed {
                 self.sfx.crash.play();
                 // Reconstruct rotation quaternion of the car for spark emitter direction
@@ -793,12 +831,14 @@ impl<'a> Game<'a> {
                 self.player.pos.x + angle.cos() * dist,
                 self.player.pos.z + angle.sin() * dist,
             );
-            let col = Color::new(
-                100 + (rand::random::<u32>() % 120) as u8,
-                100 + (rand::random::<u32>() % 120) as u8,
-                100 + (rand::random::<u32>() % 120) as u8,
-                255,
-            );
+            let ped_colors = [
+                Color::new(255, 20, 147, 255),
+                Color::new(0, 240, 255, 255),
+                Color::new(180, 0, 255, 255),
+                Color::new(50, 255, 50, 255),
+                Color::new(255, 110, 0, 255),
+            ];
+            let col = ped_colors[rand::random::<usize>() % ped_colors.len()];
             self.peds.push(Ped::new(pos, col));
         }
 
@@ -1405,7 +1445,7 @@ impl<'a> Game<'a> {
                     let headlight_pos = vadd(p, crate::render::models::rotate_vector(headlight_offset, q));
                     gathered_lights.push(crate::render::lighting::PointLight {
                         pos: headlight_pos,
-                        color: Vector3 { x: 1.4, y: 1.4, z: 1.2 }, // bright warm white
+                        color: Vector3 { x: 0.1, y: 1.6, z: 1.8 }, // neon cyan headlights
                         radius: 20.0,
                     });
 
@@ -1414,7 +1454,7 @@ impl<'a> Game<'a> {
                     let taillight_pos = vadd(p, crate::render::models::rotate_vector(taillight_offset, q));
                     gathered_lights.push(crate::render::lighting::PointLight {
                         pos: taillight_pos,
-                        color: Vector3 { x: 0.8, y: 0.1, z: 0.1 }, // red taillights
+                        color: Vector3 { x: 1.8, y: 0.1, z: 1.2 }, // neon hot pink taillights
                         radius: 10.0,
                     });
                 }
@@ -1482,7 +1522,7 @@ impl<'a> Game<'a> {
                     if is_night {
                         gathered_lights.push(crate::render::lighting::PointLight {
                             pos: bulb_pos,
-                            color: Vector3 { x: 1.0, y: 0.9, z: 0.6 }, // warm yellow streetlight
+                            color: Vector3 { x: 1.8, y: 0.1, z: 1.2 }, // neon magenta/pink streetlight
                             radius: 16.0,
                         });
                     }
@@ -1509,6 +1549,34 @@ impl<'a> Game<'a> {
         // use it automatically. Immediate-mode draws use raylib's default.
         {
             let mut d3 = d.begin_mode3D(cam);
+
+            // Draw the giant Vaporwave Sun on the horizon
+            {
+                let sun_dir = crate::config::sun_direction(total_hours);
+                // Sun is visible when it is above the horizon
+                let is_day = sun_dir.y < 0.15;
+                if is_day {
+                    let sun_yaw_rad = sun_dir.z.atan2(sun_dir.x);
+                    let sun_dist = 390.0;
+                    let sun_pos = Vector3 {
+                        x: cam_pos.x - sun_yaw_rad.cos() * sun_dist,
+                        y: cam_pos.y + 45.0, // Fixed horizon height relative to player
+                        z: cam_pos.z - sun_yaw_rad.sin() * sun_dist,
+                    };
+                    let yaw_deg = -sun_yaw_rad.to_degrees();
+                    
+                    // Draw giant flat billboard sun
+                    d3.draw_model_ex(
+                        &self.assets.sun_model,
+                        sun_pos,
+                        Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+                        yaw_deg,
+                        Vector3 { x: 150.0, y: 150.0, z: 0.1 },
+                        Color::WHITE,
+                    );
+                }
+            }
+
             // World.
             draw_world(&mut d3, &self.city, &self.assets, &self.cfg, total_hours, cam_pos);
 
@@ -1555,6 +1623,41 @@ impl<'a> Game<'a> {
                     v.variant,
                     self.time,
                 );
+            }
+
+            // Vehicle headlight halos at night
+            {
+                let is_night = !(6.5..=18.5).contains(&total_hours);
+                if is_night {
+                    for v in &self.vehicles {
+                        if v.destroyed { continue; }
+                        let rp = v.render_pos(alpha);
+                        let ry = v.render_yaw(alpha);
+                        let (_, body_h_val, body_l_val) = match v.variant {
+                            VehicleVariant::Sports => (2.05f32, 0.65f32, 4.3f32),
+                            VehicleVariant::SUV => (2.2, 1.1, 4.4),
+                            VehicleVariant::Pickup => (2.1, 0.9, 4.6),
+                            VehicleVariant::Sedan => (2.0, 0.8, 4.2),
+                        };
+                        let (_, w_rad_val) = match v.variant {
+                            VehicleVariant::Sports => (0.65f32, 0.38f32),
+                            VehicleVariant::SUV => (1.1, 0.52),
+                            VehicleVariant::Pickup => (0.9, 0.5),
+                            VehicleVariant::Sedan => (0.8, 0.4),
+                        };
+                        let y_off = body_h_val * 0.5 + w_rad_val - body_h_val * 0.12;
+                        let fwd = crate::mathx::dir_from_yaw(ry);
+                        let hl_z_off = body_l_val * 0.5 + 0.05;
+                        let hl_pos = Vector3 {
+                            x: rp.x + fwd.x * hl_z_off,
+                            y: rp.y + y_off,
+                            z: rp.z + fwd.z * hl_z_off,
+                        };
+                        // Neon cyan glow halo
+                        d3.draw_sphere(hl_pos, 0.35, Color::new(0, 240, 255, 75));
+                        d3.draw_sphere(hl_pos, 0.6, Color::new(0, 240, 255, 35));
+                    }
+                }
             }
 
             // Peds.

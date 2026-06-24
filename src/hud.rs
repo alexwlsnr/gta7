@@ -73,37 +73,37 @@ pub fn draw_hud(
     let bar_w = 200;
     let bar_h = 18;
     // Health
-    d.draw_rectangle(bar_x, bar_y, bar_w, bar_h, Color::new(30, 30, 30, 200));
+    d.draw_rectangle(bar_x, bar_y, bar_w, bar_h, Color::new(20, 10, 30, 200));
     let hp_w = ((player.health / 100.0) * bar_w as f32) as i32;
     let hp_color = if player.health > 30.0 {
-        Color::new(60, 200, 60, 255)
+        Color::new(255, 20, 147, 255) // Neon pink
     } else {
-        Color::new(220, 60, 60, 255)
+        Color::new(220, 40, 40, 255) // Neon red
     };
     d.draw_rectangle(bar_x, bar_y, hp_w, bar_h, hp_color);
-    d.draw_rectangle_lines(bar_x, bar_y, bar_w, bar_h, Color::new(200, 200, 200, 255));
+    d.draw_rectangle_lines(bar_x, bar_y, bar_w, bar_h, Color::new(0, 255, 255, 255)); // Cyan border
     d.draw_text("HP", bar_x + 4, bar_y + 1, 14, Color::new(255, 255, 255, 230));
 
     // Armor
-    d.draw_rectangle(bar_x, bar_y + 24, bar_w, bar_h, Color::new(30, 30, 30, 200));
+    d.draw_rectangle(bar_x, bar_y + 24, bar_w, bar_h, Color::new(20, 10, 30, 200));
     let ar_w = ((player.armor / 100.0) * bar_w as f32) as i32;
-    d.draw_rectangle(bar_x, bar_y + 24, ar_w, bar_h, Color::new(60, 100, 220, 255));
-    d.draw_rectangle_lines(bar_x, bar_y + 24, bar_w, bar_h, Color::new(200, 200, 200, 255));
+    d.draw_rectangle(bar_x, bar_y + 24, ar_w, bar_h, Color::new(0, 220, 255, 255)); // Neon cyan
+    d.draw_rectangle_lines(bar_x, bar_y + 24, bar_w, bar_h, Color::new(255, 0, 180, 255)); // Magenta border
     d.draw_text("AR", bar_x + 4, bar_y + 25, 14, Color::new(255, 255, 255, 230));
 
     // Nitro bar (only when in vehicle)
     if let Some(vi) = player.in_vehicle {
         if let Some(car) = vehicles.get(vi) {
             let nitro_y = bar_y - 24;
-            d.draw_rectangle(bar_x, nitro_y, bar_w, bar_h, Color::new(30, 30, 30, 200));
+            d.draw_rectangle(bar_x, nitro_y, bar_w, bar_h, Color::new(20, 10, 30, 200));
             let nitro_w = (car.nitro * bar_w as f32) as i32;
             let nitro_color = if car.nitro_active {
-                Color::new(0, 220, 255, 255) // active bright cyan
+                Color::new(255, 110, 0, 255) // Active neon orange
             } else {
-                Color::new(0, 140, 200, 255) // charging blue
+                Color::new(200, 0, 200, 255) // Charging neon purple
             };
             d.draw_rectangle(bar_x, nitro_y, nitro_w, bar_h, nitro_color);
-            d.draw_rectangle_lines(bar_x, nitro_y, bar_w, bar_h, Color::new(200, 200, 200, 255));
+            d.draw_rectangle_lines(bar_x, nitro_y, bar_w, bar_h, Color::new(0, 255, 255, 255)); // Cyan border
             d.draw_text("NITRO", bar_x + 4, nitro_y + 1, 14, Color::new(255, 255, 255, 230));
         }
     }
@@ -123,12 +123,12 @@ pub fn draw_hud(
             let speedo_x = mm_x;
 
             // Semi-transparent background panel
-            d.draw_rectangle(speedo_x, speedo_y, speedo_w, speedo_h, Color::new(15, 15, 25, 200));
-            // Cyan border if boosting, gray otherwise
+            d.draw_rectangle(speedo_x, speedo_y, speedo_w, speedo_h, Color::new(18, 8, 38, 200)); // Deep indigo
+            // Cyan border if boosting, magenta otherwise
             let border_color = if car.nitro_active {
-                Color::new(0, 220, 255, 200)
+                Color::new(0, 255, 255, 220)
             } else {
-                Color::new(120, 120, 140, 150)
+                Color::new(255, 0, 180, 180)
             };
             d.draw_rectangle_lines(speedo_x, speedo_y, speedo_w, speedo_h, border_color);
 
@@ -146,18 +146,18 @@ pub fn draw_hud(
             let bar_max_w = speedo_w - 115;
             let bar_h = 8;
             
-            d.draw_rectangle(bar_start_x, bar_y, bar_max_w, bar_h, Color::new(30, 30, 40, 255));
+            d.draw_rectangle(bar_start_x, bar_y, bar_max_w, bar_h, Color::new(25, 15, 45, 255));
             let speed_ratio = (car.speed.abs() / 48.0).clamp(0.0, 1.0);
             let bar_fill_w = (speed_ratio * bar_max_w as f32) as i32;
             let bar_color = if car.nitro_active {
-                Color::new(0, 220, 255, 255)
+                Color::new(0, 255, 255, 255)
             } else if speed_ratio > 0.8 {
-                Color::new(255, 100, 100, 255)
+                Color::new(255, 20, 147, 255) // Neon pink
             } else {
-                Color::new(80, 220, 80, 255)
+                Color::new(180, 0, 255, 255) // Neon purple
             };
             d.draw_rectangle(bar_start_x, bar_y, bar_fill_w, bar_h, bar_color);
-            d.draw_rectangle_lines(bar_start_x, bar_y, bar_max_w, bar_h, Color::new(100, 100, 100, 255));
+            d.draw_rectangle_lines(bar_start_x, bar_y, bar_max_w, bar_h, Color::new(255, 255, 255, 150));
         }
     }
 
@@ -310,8 +310,8 @@ fn draw_minimap(
     cfg: &Config,
 ) {
     // Background
-    d.draw_rectangle(mx, my, size, size, Color::new(20, 20, 25, 220));
-    d.draw_rectangle_lines(mx, my, size, size, Color::new(200, 200, 200, 255));
+    d.draw_rectangle(mx, my, size, size, Color::new(15, 10, 30, 220)); // Deep indigo
+    d.draw_rectangle_lines(mx, my, size, size, Color::new(255, 0, 180, 255)); // Neon pink border
 
     let scale = size as f32 / (cfg.block_size * 6.0); // show ~6 blocks around player
     let cx = mx + size / 2;
@@ -320,7 +320,7 @@ fn draw_minimap(
     // Draw roads as lines along grid
     let bs = city.block_size;
     let origin = -city.ground_half;
-    let road_col = Color::new(80, 80, 90, 255);
+    let road_col = Color::new(0, 255, 255, 255); // Neon cyan road grid
 
     // Calculate how far roads can be visible on the minimap
     let half_view_range = (size as f32 / scale) * 0.5 + bs;

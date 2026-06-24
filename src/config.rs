@@ -103,20 +103,31 @@ impl Config {
 
 pub struct Palette;
 impl Palette {
-    pub fn road(&self) -> Color { Color::new(72, 72, 78, 255) }
-    pub fn sidewalk(&self) -> Color { Color::new(150, 148, 145, 255) }
-    pub fn grass(&self) -> Color { Color::new(54, 110, 60, 255) }
+    pub fn road(&self) -> Color { Color::new(15, 12, 28, 255) }
+    pub fn sidewalk(&self) -> Color { Color::new(30, 20, 50, 255) }
+    pub fn grass(&self) -> Color { Color::new(220, 20, 120, 255) }
     pub fn building(&self, i: u32) -> Color {
-        // Deterministic muted building colors.
-        let h = ((i.wrapping_mul(2654435761)) % 360) as f32;
-        hsl_to_rgb(h, 0.10, 0.30 + ((i % 5) as f32) * 0.04)
+        // Neon vaporwave palette: pink, cyan, purple, lime green, orange
+        let colors = [
+            Color::new(255, 20, 147, 255), // Hot pink
+            Color::new(0, 220, 255, 255),   // Neon cyan
+            Color::new(160, 32, 240, 255),  // Electric purple
+            Color::new(50, 255, 50, 255),   // Neon lime green
+            Color::new(255, 110, 0, 255),   // Laser orange
+        ];
+        colors[(i as usize) % colors.len()]
     }
     pub fn building_top(&self, i: u32) -> Color {
-        let h = ((i.wrapping_mul(2654435761)) % 360) as f32;
-        hsl_to_rgb(h, 0.08, 0.18)
+        let body = self.building(i);
+        Color::new(
+            (body.r as f32 * 0.45) as u8,
+            (body.g as f32 * 0.45) as u8,
+            (body.b as f32 * 0.45) as u8,
+            255,
+        )
     }
-    pub fn sky_top(&self) -> Color { Color::new(96, 140, 200, 255) }
-    pub fn sky_bottom(&self) -> Color { Color::new(190, 210, 230, 255) }
+    pub fn sky_top(&self) -> Color { Color::new(40, 20, 110, 255) }
+    pub fn sky_bottom(&self) -> Color { Color::new(0, 220, 240, 255) }
 }
 
 /// Compute sky top/bottom colors for a given time of day (0..24 hours).
@@ -124,13 +135,13 @@ impl Palette {
 pub fn sky_colors_for_hour(hour: f32) -> (Color, Color) {
     // (hour, sky_top, sky_bottom)
     let keyframes: [(f32, Color, Color); 7] = [
-        (0.0,  Color::new(8, 12, 25, 255),    Color::new(15, 18, 35, 255)),   // midnight
-        (6.5,  Color::new(80, 50, 60, 255),   Color::new(200, 130, 90, 255)), // dawn
-        (8.0,  Color::new(96, 140, 200, 255), Color::new(190, 210, 230, 255)),// morning
-        (13.0, Color::new(80, 130, 200, 255), Color::new(180, 200, 230, 255)),// noon
-        (18.5, Color::new(120, 60, 40, 255),  Color::new(220, 130, 80, 255)), // dusk
-        (20.0, Color::new(30, 30, 60, 255),   Color::new(50, 50, 80, 255)),   // evening
-        (24.0, Color::new(8, 12, 25, 255),    Color::new(15, 18, 35, 255)),   // midnight (wraps)
+        (0.0,  Color::new(18, 8, 38, 255),    Color::new(80, 10, 65, 255)),   // midnight
+        (6.5,  Color::new(60, 10, 80, 255),   Color::new(255, 90, 120, 255)), // dawn
+        (8.0,  Color::new(40, 20, 110, 255),  Color::new(0, 220, 240, 255)),  // morning
+        (13.0, Color::new(160, 0, 180, 255),  Color::new(0, 240, 255, 255)),  // noon
+        (18.5, Color::new(90, 10, 120, 255),  Color::new(255, 80, 140, 255)), // dusk
+        (20.0, Color::new(25, 12, 55, 255),   Color::new(120, 15, 90, 255)),  // evening
+        (24.0, Color::new(18, 8, 38, 255),    Color::new(80, 10, 65, 255)),   // midnight (wraps)
     ];
     let h = hour.rem_euclid(24.0);
     // Find surrounding keyframes.
@@ -183,12 +194,12 @@ pub fn sun_direction(hour: f32) -> Vector3 {
 pub fn sun_color(hour: f32) -> Color {
     let h = hour.rem_euclid(24.0);
     let keyframes: [(f32, Color); 6] = [
-        (0.0,  Color::new(30, 35, 55, 255)),    // midnight — dim moonlight
-        (6.0,  Color::new(120, 80, 60, 255)),   // pre-dawn — dim warm
-        (7.5,  Color::new(255, 180, 120, 255)), // dawn — warm orange
-        (13.0, Color::new(255, 250, 235, 255)), // noon — bright white
-        (18.5, Color::new(255, 160, 90, 255)),  // dusk — warm orange
-        (24.0, Color::new(30, 35, 55, 255)),    // wraps to midnight
+        (0.0,  Color::new(50, 20, 75, 255)),    // midnight — dim neon violet moonlight
+        (6.0,  Color::new(130, 40, 90, 255)),   // pre-dawn — warm dark pink
+        (7.5,  Color::new(255, 120, 150, 255)), // dawn — hot pink-orange
+        (13.0, Color::new(220, 255, 255, 255)), // noon — glowing bright electric cyan/white
+        (18.5, Color::new(255, 80, 160, 255)),  // dusk — blazing magenta
+        (24.0, Color::new(50, 20, 75, 255)),    // wraps to midnight
     ];
     let mut i = 0;
     while i < keyframes.len() - 1 && keyframes[i + 1].0 <= h {

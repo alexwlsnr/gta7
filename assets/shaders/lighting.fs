@@ -53,21 +53,25 @@ float compute_shadow() {
     if (fragLightSpacePos.w == 0.0) {
         return 1.0;
     }
-    // Perform perspective/orthogonal projection divide
     vec3 projCoords = fragLightSpacePos.xyz / fragLightSpacePos.w;
-    // Transform to [0,1] range
     projCoords = projCoords * 0.5 + 0.5;
-    // Keep shadows inside light frustum boundaries
     if (projCoords.x < 0.0 || projCoords.x > 1.0 || 
         projCoords.y < 0.0 || projCoords.y > 1.0 || 
         projCoords.z > 1.0) {
-        return 1.0; // fully lit
+        return 1.0;
     }
-    float closestDepth = texture(u_shadowMap, projCoords.xy).r;
     float currentDepth = projCoords.z;
-    // Shadow bias to prevent acne.
-    float bias = 0.005;
-    return currentDepth - bias < closestDepth ? 1.0 : 0.4;
+    float bias = 0.003;
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / textureSize(u_shadowMap, 0);
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            float pcfDepth = texture(u_shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += currentDepth - bias < pcfDepth ? 1.0 : 0.35;
+        }
+    }
+    shadow /= 9.0;
+    return shadow;
 }
 
 void accumulatePointLight(
@@ -109,9 +113,8 @@ void main() {
         lightDir = -u_lightDir / lightDirLen;
     }
 
-    // Building window emissive glow at night
-    // Yellow color in texture corresponds to RGB approx: r > 0.9, g > 0.8, b < 0.75.
-    bool isWindow = (texColor.r > 0.9 && texColor.g > 0.8 && texColor.b < 0.75);
+    // Building window emissive glow at night (tagged with alpha = 254/255)
+    bool isWindow = (texColor.a > 0.992 && texColor.a < 0.998);
     
     // Specular and metallic properties (override for building windows to make them glossy)
     float activeMetallic = isWindow ? 0.0 : u_metallic;
@@ -167,9 +170,22 @@ void main() {
     // Final output combining ambient + diffuse + specular + point light diffuse + point light specular
     vec3 lit = ambient + diffuse + specular + pointLightDiffuse + pointLightSpecular;
 
+    // Fresnel rim lighting — highlights edges of geometry facing away from camera
+    float fresnel = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
+    vec3 rimColor = u_lightColor * 0.4 * fresnel * (1.0 - activeRoughness);
+    lit += rimColor;
+
+    // Metallic environment reflection (sky-based fake cubemap)
+    if (activeMetallic > 0.1) {
+        vec3 reflDir = reflect(-viewDir, normal);
+        float skyGrad = reflDir.y * 0.5 + 0.5;
+        vec3 envColor = mix(vec3(0.15, 0.12, 0.10), u_fogColor, skyGrad);
+        lit = mix(lit, envColor * baseColor * 2.0, activeMetallic * 0.35 * (1.0 - activeRoughness));
+    }
+
     // Building window emissive glow at night
     if (isWindow) {
-        vec3 windowColor = vec3(1.0, 0.9, 0.6);
+        vec3 windowColor = texColor.rgb * 2.0;
         lit = mix(lit, windowColor, u_windowGlow);
     }
 

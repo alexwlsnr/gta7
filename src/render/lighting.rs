@@ -61,7 +61,7 @@ impl LightingSystem {
             rl.load_shader(thread, None, None)
         };
 
-        let shadow_map = rl.load_render_texture(thread, 1024, 1024).unwrap();
+        let shadow_map = rl.load_render_texture(thread, 2048, 2048).unwrap();
 
         // Shadow camera: orthographic, follows player.
         let shadow_camera = Camera3D {

@@ -40,25 +40,67 @@ pub struct Assets {
     pub dash_tex: Texture2D,
     pub sky_top: Color,
     pub sky_bottom: Color,
+    pub sun_model: Model,
+    pub sun_tex: Texture2D,
+    pub underglow_model: Model,
+    pub underglow_tex: Texture2D,
 }
 
 impl Assets {
     pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: &Config) -> Self {
         let p = cfg.palette();
 
-        // --- Window facade texture ---
-        let mut win = Image::gen_image_color(64, 64, Color::new(40, 50, 70, 255));
-        let lit = Color::new(255, 230, 150, 255);
-        let dark = Color::new(20, 25, 40, 255);
+        // --- Window facade texture (128x128 with realistic detail) ---
+        let mut win = Image::gen_image_color(128, 128, Color::new(45, 52, 72, 255));
+        // Each window cell is 16x16 pixels, giving an 8x8 grid of windows
         for by in 0..8 {
             for bx in 0..8 {
-                let x0 = bx * 8 + 2;
-                let y0 = by * 8 + 2;
-                let col = if ((bx + by) % 3 == 0) && (bx % 2 == 0) { lit } else { dark };
-                for yy in 0..4 {
-                    for xx in 0..4 {
-                        win.draw_pixel(x0 + xx, y0 + yy, col);
+                let x0 = bx * 16;
+                let y0 = by * 16;
+                // Window frame border (dark)
+                let frame = Color::new(30, 34, 48, 255);
+                for yy in 0..16 {
+                    for xx in 0..16 {
+                        win.draw_pixel(x0 + xx, y0 + yy, frame);
                     }
+                }
+                // Determine window state using a deterministic hash
+                let hash = ((bx * 7 + by * 13 + bx * by * 3) % 11) as u8;
+                let (pane_col, has_curtain) = match hash {
+                    0..=2 => (Color::new(0, 255, 255, 254), false),    // neon cyan window
+                    3 => (Color::new(255, 0, 180, 254), false),        // hot pink/magenta window
+                    4 => (Color::new(50, 255, 50, 254), true),         // neon lime green window
+                    5 => (Color::new(255, 110, 0, 254), true),         // laser orange window
+                    _ => (Color::new(18, 12, 38, 255), false),         // dark unlit windows (standard alpha)
+                };
+                // Inner window pane (with 2px frame inset)
+                for yy in 2..14 {
+                    for xx in 2..14 {
+                        let mut c = pane_col;
+                        // Horizontal blinds effect for curtained windows
+                        if has_curtain && yy % 3 == 0 {
+                            c = Color::new(
+                                (c.r as f32 * 0.6) as u8,
+                                (c.g as f32 * 0.6) as u8,
+                                (c.b as f32 * 0.6) as u8,
+                                c.a, // Preserve tagged alpha (254 or 255)
+                            );
+                        }
+                        // Vertical mullion (center divider)
+                        if xx == 7 || xx == 8 {
+                            c = frame;
+                        }
+                        // Horizontal transom (center divider)
+                        if yy == 7 || yy == 8 {
+                            c = frame;
+                        }
+                        win.draw_pixel(x0 + xx, y0 + yy, c);
+                    }
+                }
+                // Window sill at bottom (light concrete strip)
+                for xx in 1..15 {
+                    win.draw_pixel(x0 + xx, y0 + 14, Color::new(80, 82, 90, 255));
+                    win.draw_pixel(x0 + xx, y0 + 15, Color::new(70, 72, 80, 255));
                 }
             }
         }
@@ -206,7 +248,7 @@ impl Assets {
                 let dy = y as f32 - 7.5;
                 let r2 = dx*dx + dy*dy;
                 if r2 < 12.0 {
-                    hl_img.draw_pixel(x, y, Color::new(255, 255, 230, 255)); // bulb glow
+                    hl_img.draw_pixel(x, y, Color::new(0, 240, 255, 255)); // cyan bulb glow
                 } else if r2 < 24.0 {
                     hl_img.draw_pixel(x, y, Color::new(170, 170, 175, 255)); // silver reflector
                 } else {
@@ -227,7 +269,7 @@ impl Assets {
             for x in 0..16 {
                 let is_grid = (x % 3 == 0) || (y % 3 == 0);
                 if is_grid {
-                    tl_img.draw_pixel(x, y, Color::new(240, 40, 40, 255)); // bright grid
+                    tl_img.draw_pixel(x, y, Color::new(255, 0, 180, 255)); // bright neon pink grid
                 }
                 // indicators / reverse
                 if x >= 11 && y >= 11 {
@@ -308,6 +350,57 @@ impl Assets {
         dash_model.materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &dash_tex);
 
+        // --- 5. Vaporwave Sun Texture & Model ---
+        let mut sun_img = Image::gen_image_color(64, 64, Color::new(0, 0, 0, 0));
+        for y in 0..64 {
+            let fy = y as f32 / 63.0; // 0 at top, 1 at bottom
+            for x in 0..64 {
+                let dx = x as f32 - 31.5;
+                let dy = y as f32 - 31.5;
+                let dist = (dx*dx + dy*dy).sqrt();
+                if dist < 31.5 {
+                    // OutRun styled scanline stripes
+                    let stripe_pitch = 8.0;
+                    let stripe_val = (y as f32 % stripe_pitch) / stripe_pitch;
+                    let threshold = fy * 0.85;
+                    if stripe_val < threshold && y > 12 {
+                        continue;
+                    }
+                    // Color gradient: yellow/orange at top to hot pink/magenta at bottom
+                    let r = 255;
+                    let g = ((1.0 - fy) * 230.0) as u8;
+                    let b = (fy * 150.0) as u8;
+                    let edge_alpha = ((31.5 - dist).clamp(0.0, 1.0) * 255.0) as u8;
+                    sun_img.draw_pixel(x, y, Color::new(r, g, b, edge_alpha));
+                }
+            }
+        }
+        let sun_tex = rl.load_texture_from_image(thread, &sun_img).unwrap();
+        let sun_mesh = Mesh::gen_mesh_cube(thread, 1.0, 1.0, 1.0);
+        let sun_weak = unsafe { sun_mesh.make_weak() };
+        let mut sun_model = rl.load_model_from_mesh(thread, sun_weak).unwrap();
+        sun_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &sun_tex);
+
+        // --- 6. Underglow Texture & Model ---
+        let mut ug_img = Image::gen_image_color(32, 32, Color::new(0, 0, 0, 0));
+        for y in 0..32 {
+            for x in 0..32 {
+                let dx = x as f32 - 15.5;
+                let dy = y as f32 - 15.5;
+                let dist = (dx*dx + dy*dy).sqrt();
+                let alpha = (1.0 - (dist / 15.5).clamp(0.0, 1.0)).powf(2.0);
+                let a_val = (alpha * 255.0) as u8;
+                ug_img.draw_pixel(x, y, Color::new(255, 255, 255, a_val));
+            }
+        }
+        let underglow_tex = rl.load_texture_from_image(thread, &ug_img).unwrap();
+        let ug_mesh = Mesh::gen_mesh_plane(thread, 1.0, 1.0, 1, 1);
+        let ug_weak = unsafe { ug_mesh.make_weak() };
+        let mut underglow_model = rl.load_model_from_mesh(thread, ug_weak).unwrap();
+        underglow_model.materials_mut()[0]
+            .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &underglow_tex);
+
         Assets {
             building_model,
             plain_cube_model,
@@ -334,6 +427,10 @@ impl Assets {
             dash_tex,
             sky_top: p.sky_top(),
             sky_bottom: p.sky_bottom(),
+            sun_model,
+            sun_tex,
+            underglow_model,
+            underglow_tex,
         }
     }
 }
@@ -417,8 +514,8 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         }
     }
 
-    // Lane center dashes (yellow).
-    let yellow = Color::new(220, 190, 70, 255);
+    // Lane center dashes (neon cyan).
+    let neon_cyan = Color::new(0, 255, 255, 255);
     for lane in &city.lanes {
         let a = city.intersection(lane.from.0, lane.from.1);
         let b = city.intersection(lane.to.0, lane.to.1);
@@ -432,7 +529,7 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         if (mid.x - cam_pos.x).abs() > 180.0 || (mid.z - cam_pos.z).abs() > 180.0 {
             continue;
         }
-        d3.draw_plane(mid, Vector2::new(2.0, 0.3), yellow);
+        d3.draw_plane(mid, Vector2::new(2.0, 0.3), neon_cyan);
     }
 
     // Parks: grass planes + trees + fountains/statues.
@@ -457,10 +554,15 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
                     0.3, 0.3, 2.0, 6,
                     Color::new(90, 60, 40, 255),
                 );
+                let tree_color = match k % 3 {
+                    0 => Color::new(0, 240, 255, 255),   // neon cyan tree
+                    1 => Color::new(255, 0, 180, 255),   // neon magenta tree
+                    _ => Color::new(255, 230, 0, 255),   // glowing neon yellow tree
+                };
                 d3.draw_sphere(
                     Vector3 { x: tx, y: 2.6, z: tz },
                     1.2,
-                    Color::new(40, 120, 50, 255),
+                    tree_color,
                 );
             }
             // Pond
@@ -554,12 +656,12 @@ pub fn draw_world(d3: &mut impl RaylibDraw3D, city: &City, assets: &Assets, cfg:
         if dist_sq > 130.0 * 130.0 {
             continue;
         }
-        draw_building(d3, b, assets, &p);
+        draw_building(d3, b, assets, &p, hour);
     }
 
     // Streetlights at intersection corners (culled by camera distance to optimize draw calls)
     let is_night = !(6.5..=18.5).contains(&hour);
-    let bulb_color = if is_night { Color::new(255, 255, 180, 255) } else { Color::new(180, 180, 180, 255) };
+    let bulb_color = if is_night { Color::new(255, 0, 180, 255) } else { Color::new(180, 180, 180, 255) };
     let sw_offset = rw * 0.5 + sw * 0.5;
 
     for i in (cam_bi - radius)..=(cam_bi + radius) {
@@ -622,7 +724,7 @@ fn lane_center(lane: &crate::world::city::Lane, rw: f32) -> (f32, f32) {
     }
 }
 
-fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &crate::config::Palette) {
+fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &crate::config::Palette, hour: f32) {
     let c = b.box3d.center();
     let h = b.box3d.half();
     let w = h.x * 2.0;
@@ -668,8 +770,39 @@ fn draw_building(d3: &mut impl RaylibDraw3D, b: &Building, assets: &Assets, p: &
         Vector3 { x: 0.0, y: 1.0, z: 0.0 },
         0.0,
         Vector3 { x: w, y: hgt, z: l },
-        Color::new(15, 15, 20, 255),
+        Color::new(body.r, body.g, body.b, 255),
     );
+
+    // Floating neon holographic sign on top of tall buildings!
+    if hgt > 18.0 {
+        let time = hour * 12.0; // progress animation
+        let time_offset = b.color_index as f32 * 2.0;
+        let sign_y = top.y + 4.0 + (time + time_offset).sin() * 0.7; // float animation!
+        let sign_pos = Vector3 { x: c.x, y: sign_y, z: c.z };
+        let sign_color = if b.color_index % 2 == 0 {
+            Color::new(0, 255, 255, 200) // Cyan hologram
+        } else {
+            Color::new(255, 0, 180, 200) // Magenta hologram
+        };
+        // Draw rotating double-nested wireframe cube/diamond
+        let rotate_angle = time * 25.0 + time_offset * 45.0;
+        d3.draw_model_wires_ex(
+            &assets.plain_cube_model,
+            sign_pos,
+            Vector3 { x: 0.0, y: 1.0, z: 0.0 },
+            rotate_angle,
+            Vector3 { x: 4.5, y: 4.5, z: 4.5 },
+            sign_color,
+        );
+        d3.draw_model_wires_ex(
+            &assets.plain_cube_model,
+            sign_pos,
+            Vector3 { x: 1.0, y: 0.0, z: 1.0 },
+            rotate_angle * 0.6,
+            Vector3 { x: 6.0, y: 6.0, z: 6.0 },
+            Color::new(sign_color.r / 3, sign_color.g / 3, sign_color.b / 3, 100),
+        );
+    }
 }
 
 /// Draw a car body at a position with a yaw (radians) and a color.
@@ -789,6 +922,34 @@ pub fn draw_car(
             );
         };
     }
+
+    // Cyberpunk dynamic underglow color
+    let underglow_color = if kind == VehicleKind::Police {
+        let is_red = (time * 8.0).sin() > 0.0;
+        if is_red {
+            Color::new(255, 10, 10, 180)
+        } else {
+            Color::new(10, 50, 255, 180)
+        }
+    } else {
+        let mut c = body_color;
+        let max_ch = c.r.max(c.g).max(c.b) as f32;
+        if max_ch > 0.0 {
+            c.r = ((c.r as f32 / max_ch) * 255.0) as u8;
+            c.g = ((c.g as f32 / max_ch) * 255.0) as u8;
+            c.b = ((c.b as f32 / max_ch) * 255.0) as u8;
+        }
+        Color::new(c.r, c.g, c.b, 140)
+    };
+
+    // Draw underglow plane on the ground
+    let underglow_offset_y = -(h_val * 0.5 + w_rad_val) + 0.03;
+    local_draw!(
+        &assets.underglow_model,
+        Vector3 { x: 0.0, y: underglow_offset_y, z: 0.0 },
+        Vector3 { x: body_w * 1.35, y: 1.0, z: body_l * 1.15 },
+        underglow_color
+    );
 
     // 1. Draw High-Poly Split Body Components to form open wheel wells & realistic contours
     lighting.set_material_properties(0.8, 0.15, 1.0); // Next-gen metallic paint
