@@ -448,7 +448,46 @@ impl PostFx {
             raylib::ffi::rlActiveTextureSlot(1);
             raylib::ffi::rlDisableTexture();
         }
-        // Pass 4b: God rays (output_fbo -> scene_fbo temp -> output_fbo).
+        // Pass 4b: SSR (output_fbo -> ssr_fbo -> output_fbo).
+        // 24-step screen-space vertical march that mixes a small fraction of
+        // the colors above each pixel back into the base, weighted by
+        // `ssr_wetness`. Skipped entirely when wetness is below 0.01 so the
+        // day-time path is a no-op. Uses `ssr_fbo` as the scratch target so
+        // we don't conflict with the CRT pass's `scene_fbo` scratch usage.
+        if self.ssr_wetness > 0.01 {
+            // Snapshot output_fbo's texture so the borrow ends before we
+            // mutably borrow ssr_fbo (same pattern as the god_rays pass).
+            let output_tex = self.output_fbo.texture().clone();
+            {
+                let mut st = rl.begin_texture_mode(thread, &mut self.ssr_fbo);
+                st.clear_background(Color::BLACK);
+                {
+                    let mut ss = st.begin_shader_mode(&mut self.ssr_shader);
+                    ss.draw_texture_pro(
+                        output_tex,
+                        full_src,
+                        full_dst,
+                        Vector2::zero(),
+                        0.0,
+                        Color::WHITE,
+                    );
+                }
+            }
+            // Blit ssr_fbo (SSR result) back to output_fbo without a shader.
+            let ssr_tex = self.ssr_fbo.texture().clone();
+            {
+                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+                ot.draw_texture_pro(
+                    ssr_tex,
+                    full_src,
+                    full_dst,
+                    Vector2::zero(),
+                    0.0,
+                    Color::WHITE,
+                );
+            }
+        }
+        // Pass 4c: God rays (output_fbo -> scene_fbo temp -> output_fbo).
         // Runs only when the configured intensity clears 0.01 (i.e. at dawn/dusk);
         // otherwise output_fbo is left untouched. Uses scene_fbo as a scratch
         // target for the same reason as the CRT pass — `begin_texture_mode`
@@ -483,58 +522,6 @@ impl PostFx {
                 let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
                 ot.draw_texture_pro(
                     scene_tex,
-                    full_src,
-                    full_dst,
-                    Vector2::zero(),
-                    0.0,
-                    Color::WHITE,
-                );
-            }
-            // Blit scene_fbo (god ray result) back to output_fbo without a shader.
-            let scene_tex = self.scene_fbo.texture().clone();
-            {
-                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
-                ot.draw_texture_pro(
-                    scene_tex,
-                    full_src,
-                    full_dst,
-                    Vector2::zero(),
-                    0.0,
-                    Color::WHITE,
-                );
-            }
-        }
-        // Pass 4c: SSR (output_fbo -> ssr_fbo -> output_fbo).
-        // 24-step screen-space vertical march that mixes a small fraction of
-        // the colors above each pixel back into the base, weighted by
-        // `ssr_wetness`. Skipped entirely when wetness is below 0.01 so the
-        // day-time path is a no-op. Uses `ssr_fbo` as the scratch target so
-        // we don't conflict with the CRT pass's `scene_fbo` scratch usage.
-        if self.ssr_wetness > 0.01 {
-            // Snapshot output_fbo's texture so the borrow ends before we
-            // mutably borrow ssr_fbo (same pattern as the god_rays pass).
-            let output_tex = self.output_fbo.texture().clone();
-            {
-                let mut st = rl.begin_texture_mode(thread, &mut self.ssr_fbo);
-                st.clear_background(Color::BLACK);
-                {
-                    let mut ss = st.begin_shader_mode(&mut self.ssr_shader);
-                    ss.draw_texture_pro(
-                        output_tex,
-                        full_src,
-                        full_dst,
-                        Vector2::zero(),
-                        0.0,
-                        Color::WHITE,
-                    );
-                }
-            }
-            // Blit ssr_fbo (SSR result) back to output_fbo without a shader.
-            let ssr_tex = self.ssr_fbo.texture().clone();
-            {
-                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
-                ot.draw_texture_pro(
-                    ssr_tex,
                     full_src,
                     full_dst,
                     Vector2::zero(),
