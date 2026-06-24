@@ -44,6 +44,12 @@ pub struct Assets {
     pub sun_tex: Texture2D,
     pub underglow_model: Model,
     pub underglow_tex: Texture2D,
+    /// Large inside-out sphere (radius 500) rendered as the sky background.
+    /// Drawn first in the scene pass with the sky shader; the starfield
+    /// texture is bound as its albedo map.
+    pub sky_dome_model: Model,
+    /// Procedural 512x512 starfield with ~0.5% star density and neon tints.
+    pub starfield_tex: Texture2D,
 }
 
 impl Assets {
@@ -401,6 +407,40 @@ impl Assets {
         underglow_model.materials_mut()[0]
             .set_material_texture(MaterialMapIndex::MATERIAL_MAP_ALBEDO, &underglow_tex);
 
+        // --- 7. Starfield texture + sky dome model ---
+        // Procedural 512x512 starfield: ~1300 stars (~0.5% density) at varying
+        // brightness. ~10% of stars get neon tints (pink/cyan/purple) for the
+        // vaporwave aesthetic. The sky shader samples this via spherical UV
+        // mapping and modulates star alpha by time of day.
+        let mut star_img = Image::gen_image_color(512, 512, Color::new(0, 0, 0, 0));
+        for _ in 0..1300 {
+            let x = (rand::random::<u32>() % 512) as i32;
+            let y = (rand::random::<u32>() % 512) as i32;
+            let brightness = 100 + (rand::random::<u32>() % 155) as u8;
+            let color = if rand::random::<u32>() % 10 == 0 {
+                match rand::random::<u32>() % 3 {
+                    0 => Color::new(255, 100, 200, brightness), // pink
+                    1 => Color::new(100, 200, 255, brightness), // cyan
+                    _ => Color::new(200, 150, 255, brightness), // purple
+                }
+            } else {
+                Color::new(brightness, brightness, brightness, brightness)
+            };
+            star_img.draw_pixel(x, y, color);
+        }
+        let starfield_tex = rl.load_texture_from_image(thread, &star_img).unwrap();
+        // Large sphere (radius 500) rendered inside-out: the camera sits inside
+        // it, so it acts as a far background behind all world geometry. The
+        // starfield is bound as the albedo map; the sky shader (set per-frame
+        // via begin_shader_mode) supplies the gradient + star alpha uniforms.
+        let sky_mesh = Mesh::gen_mesh_sphere(thread, 500.0, 16, 16);
+        let sky_weak = unsafe { sky_mesh.make_weak() };
+        let mut sky_dome_model = rl.load_model_from_mesh(thread, sky_weak).unwrap();
+        sky_dome_model.materials_mut()[0].set_material_texture(
+            MaterialMapIndex::MATERIAL_MAP_ALBEDO,
+            &starfield_tex,
+        );
+
         Assets {
             building_model,
             plain_cube_model,
@@ -431,6 +471,8 @@ impl Assets {
             sun_tex,
             underglow_model,
             underglow_tex,
+            sky_dome_model,
+            starfield_tex,
         }
     }
 }

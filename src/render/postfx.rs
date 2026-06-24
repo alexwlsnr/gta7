@@ -25,6 +25,9 @@ pub struct PostFx {
     /// CRT aesthetic pass (chromatic aberration, scanlines, vignette, ACES,
     /// film grain) — the final post-processing pass before `blit()`.
     crt_shader: Shader,
+    /// Sky dome shader (gradient + procedural starfield). Applied per-frame
+    /// via `begin_shader_mode` around the sky dome `draw_model` call.
+    pub sky_shader: Shader,
 
     // Cached uniform locations. `loc_blur_direction` and `loc_bloom_bloom` are
     // used per-frame; the rest are set once at load and retained for future
@@ -38,10 +41,15 @@ pub struct PostFx {
     loc_bloom_strength: i32,
     /// Sampler location for `texture1` (the bloom buffer) in the composite shader.
     loc_bloom_bloom: i32,
-    /// Per-frame time uniform for the animated film grain in the CRT shader.
     loc_crt_time: i32,
     /// Resolution uniform for the CRT scanline spacing.
     loc_crt_resolution: i32,
+    /// Sky gradient top color uniform (`u_skyTop`).
+    loc_sky_top: i32,
+    /// Sky gradient bottom color uniform (`u_skyBottom`).
+    loc_sky_bottom: i32,
+    /// Starfield visibility uniform (`u_starAlpha`): 0 = day, 1 = night.
+    loc_star_alpha: i32,
 
     width: i32,
     height: i32,
@@ -101,6 +109,18 @@ impl PostFx {
             let s = rl.load_shader(thread, None, Some("assets/shaders/crt_post.fs"));
             if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
         };
+        // Sky dome shader: vertex passes the world-space direction to the
+        // fragment stage; fragment builds the gradient + samples the starfield.
+        // Loaded with both stages (unlike the fullscreen post passes, which are
+        // fragment-only and reuse raylib's default billboard vertex shader).
+        let sky_shader = {
+            let s = rl.load_shader(
+                thread,
+                Some("assets/shaders/sky.vs"),
+                Some("assets/shaders/sky.fs"),
+            );
+            if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
+        };
 
         // Cache uniform locations (-1 = not found / inactive).
         let loc_threshold = bright_shader.get_shader_location("u_threshold");
@@ -110,6 +130,9 @@ impl PostFx {
         let loc_bloom_bloom = bloom_shader.get_shader_location("texture1");
         let loc_crt_time = crt_shader.get_shader_location("u_time");
         let loc_crt_resolution = crt_shader.get_shader_location("u_resolution");
+        let loc_sky_top = sky_shader.get_shader_location("u_skyTop");
+        let loc_sky_bottom = sky_shader.get_shader_location("u_skyBottom");
+        let loc_star_alpha = sky_shader.get_shader_location("u_starAlpha");
 
         // Default uniform values.
         bright_shader.set_shader_value(loc_threshold, 0.85f32);
@@ -129,6 +152,7 @@ impl PostFx {
             blur_shader,
             bloom_shader,
             crt_shader,
+            sky_shader,
             loc_threshold,
             loc_soft_knee,
             loc_blur_direction,
@@ -136,11 +160,35 @@ impl PostFx {
             loc_bloom_bloom,
             loc_crt_time,
             loc_crt_resolution,
+            loc_sky_top,
+            loc_sky_bottom,
+            loc_star_alpha,
             width,
             height,
             half_width,
             half_height,
         }
+    }
+
+    /// Set the per-frame sky dome uniforms: gradient top/bottom colors and the
+    /// starfield visibility alpha (0 = day, 1 = night). Call this just before
+    /// drawing the sky dome inside `begin_shader_mode(sky_shader)`.
+    pub fn set_sky_uniforms(
+        &mut self,
+        sky_top: Vector3,
+        sky_bottom: Vector3,
+        star_alpha: f32,
+    ) {
+        self.sky_shader.set_shader_value(self.loc_sky_top, sky_top);
+        self.sky_shader
+            .set_shader_value(self.loc_sky_bottom, sky_bottom);
+        self.sky_shader
+            .set_shader_value(self.loc_star_alpha, star_alpha);
+    }
+
+    /// Borrow the sky shader for `begin_shader_mode` around the sky dome draw.
+    pub fn sky_shader(&mut self) -> &mut Shader {
+        &mut self.sky_shader
     }
 
     /// Run all post-processing passes, outputting to the internal output FBO.

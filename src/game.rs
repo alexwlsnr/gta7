@@ -1398,25 +1398,46 @@ impl<'a> Game<'a> {
         // `begin_drawing` both hold `&mut rl`.
         // Resize the scene FBO if the window size changed (e.g. fullscreen toggle).
         self.postfx.resize_if_needed(rl, thread, rl.get_screen_width(), rl.get_screen_height());
+
+        // Day/night sky colors computed from game time. The sky dome shader
+        // uniforms must be set BEFORE entering the scene FBO texture mode —
+        // `set_sky_uniforms` takes `&mut PostFx`, which would alias the
+        // `&mut scene_fbo` borrow held by the texture-mode guard below. Shader
+        // uniform values persist on the shader object, so setting them here
+        // and sampling them inside the FBO pass works fine.
+        let (sky_top, sky_bottom) = crate::config::sky_colors_for_hour(total_hours);
+        let h = total_hours.rem_euclid(24.0);
+        let star_alpha = if h < 5.5 || h > 19.0 {
+            1.0
+        } else if h < 7.0 {
+            (7.0 - h) / 1.5
+        } else if h > 18.0 {
+            (h - 18.0) / 1.0
+        } else {
+            0.0
+        };
+        self.postfx.set_sky_uniforms(
+            Vector3::new(
+                sky_top.r as f32 / 255.0,
+                sky_top.g as f32 / 255.0,
+                sky_top.b as f32 / 255.0,
+            ),
+            Vector3::new(
+                sky_bottom.r as f32 / 255.0,
+                sky_bottom.g as f32 / 255.0,
+                sky_bottom.b as f32 / 255.0,
+            ),
+            star_alpha.clamp(0.0, 1.0),
+        );
+
         {
         let mut dt = rl.begin_texture_mode(thread, &mut self.postfx.scene_fbo);
         // Clear color + depth buffer (depth clear is essential — without it 3D
         // geometry fails the depth test against stale values and renders nothing).
-        // Day/night sky colors computed from game time (total_hours set above
-        // for the shadow pass).
-        let (sky_top, sky_bottom) = crate::config::sky_colors_for_hour(total_hours);
+        // The sky dome covers the full view, but clearing to the horizon color
+        // remains as a safety net for any uncovered pixels.
         dt.clear_background(sky_bottom);
-        let sh = dt.get_screen_height();
-        for y in (0..sh).step_by(2) {
-            let t = y as f32 / sh as f32;
-            let c = Color::new(
-                (sky_top.r as f32 + (sky_bottom.r as f32 - sky_top.r as f32) * t) as u8,
-                (sky_top.g as f32 + (sky_bottom.g as f32 - sky_top.g as f32) * t) as u8,
-                (sky_top.b as f32 + (sky_bottom.b as f32 - sky_top.b as f32) * t) as u8,
-                255,
-            );
-            dt.draw_rectangle(0, y, dt.get_screen_width(), 2, c);
-        }
+
 
         // Gather dynamic point lights
         let mut gathered_lights = Vec::new();
@@ -1563,6 +1584,20 @@ impl<'a> Game<'a> {
         // use it automatically. Immediate-mode draws use raylib's default.
         {
             let mut d3 = dt.begin_mode3D(cam);
+
+            // Sky dome — drawn first so it is always behind world geometry.
+            // A large sphere (radius 500) rendered with the sky shader, which
+            // builds a vertical gradient from the view direction's Y component
+            // and additive-blends the procedural starfield (faded by time of
+            // day via u_starAlpha). Centered on the camera XZ so it follows the
+            // player; the camera sits inside the sphere. `begin_shader_mode`
+            // supplies the sky shader (and its uniforms set above), overriding
+            // the model's material shader for this draw.
+            let sky_pos = Vector3 { x: cam_pos.x, y: 0.0, z: cam_pos.z };
+            {
+                let mut ss = d3.begin_shader_mode(&mut self.postfx.sky_shader);
+                ss.draw_model(&self.assets.sky_dome_model, sky_pos, 1.0, Color::WHITE);
+            }
 
             // Draw the giant Vaporwave Sun on the horizon
             {
