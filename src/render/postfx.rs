@@ -228,10 +228,17 @@ impl PostFx {
         }
 
         // Pass 4: Bloom composite (scene + bloom -> output_fbo).
-        // raylib auto-binds the draw_texture_pro source as `texture0` (scene);
-        // bind the blurred bloom buffer to `texture1` via its sampler location.
-        self.bloom_shader
-            .set_shader_value_texture(self.loc_bloom_bloom, self.blur_fbo[1].texture());
+        // raylib auto-binds the draw_texture_pro source as `texture0` (scene).
+        // For `texture1` (bloom), we must manually bind it to texture unit 1
+        // and set the uniform to the UNIT INDEX (1), not the texture ID.
+        // raylib's SetShaderValueTexture sets the wrong value (texture ID),
+        // so we use FFI to bind properly and set_shader_value for the unit index.
+        let bloom_tex = self.blur_fbo[1].texture().clone();
+        self.bloom_shader.set_shader_value(self.loc_bloom_bloom, 1i32);
+        unsafe {
+            raylib::ffi::rlActiveTextureSlot(1);
+            raylib::ffi::rlEnableTexture(bloom_tex.id);
+        }
         {
             let mut ct = rl.begin_texture_mode(thread, &mut self.output_fbo);
             ct.clear_background(Color::BLACK);
@@ -246,6 +253,11 @@ impl PostFx {
                     Color::WHITE,
                 );
             }
+        }
+        // Unbind unit 1 so it doesn't leak into subsequent passes
+        unsafe {
+            raylib::ffi::rlActiveTextureSlot(1);
+            raylib::ffi::rlDisableTexture();
         }
         // Pass 5: CRT post filter (output_fbo -> scene_fbo temp -> output_fbo).
         // `begin_texture_mode` borrows the destination FBO mutably, so we can't
