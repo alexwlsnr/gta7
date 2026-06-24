@@ -172,12 +172,12 @@ no-ops outside test mode.
 - For deterministic NPC traffic, use the seeded RNG (already exposed in
   `crate::world::city::City`).
 
-### `src/camera.rs`
-
 - Extend `FollowCamera` with a `Mode` enum: `Follow { target: Vector3, distance: f32 }` and
   `Free { pos, yaw, pitch }`.
 - In test mode, `Free` mode ignores the player and uses absolute world
-  coordinates. Arrow keys / mouse still work for free orbit.
+  coordinates. `WASD` translates the camera in the horizontal plane
+  relative to its current yaw, `Q/E` moves up/down, mouse drag (with
+  right-button held) yaws and pitches.
 
 ### `src/postfx.rs` (new or in `render/`)
 
