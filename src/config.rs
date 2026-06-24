@@ -229,6 +229,18 @@ pub fn sun_position(hour: f32, player_pos: Vector3) -> Vector3 {
     }
 }
 
+/// God ray intensity from sun elevation. Zero at noon and night, peak at dawn/dusk.
+pub fn god_ray_intensity(hour: f32) -> f32 {
+    let h = hour.rem_euclid(24.0);
+    if h < 5.0 || h > 20.0 {
+        0.0
+    } else {
+        let angle = ((h - 6.0) / 24.0) * std::f32::consts::TAU;
+        let elevation = angle.sin().abs();
+        (1.0 - elevation).max(0.0).min(1.0) * 0.6
+    }
+}
+
 pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> Color {
     let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
     let h60 = h / 60.0;
@@ -288,5 +300,35 @@ mod tests {
         // Night sun (moonlight) should be very dim.
         assert!(col.r < 80 && col.g < 80 && col.b < 100,
             "night sun should be dim, got {:?}", col);
+    }
+
+    #[test]
+    fn god_ray_intensity_zero_at_night() {
+        assert_eq!(god_ray_intensity(0.0), 0.0);
+        assert_eq!(god_ray_intensity(4.0), 0.0);
+        assert_eq!(god_ray_intensity(21.0), 0.0);
+    }
+
+    #[test]
+    fn god_ray_intensity_zero_at_noon() {
+        // At noon (12h, sin(angle)=1) the elevation is 1 so (1-1)*0.6 = 0.
+        assert_eq!(god_ray_intensity(12.0), 0.0);
+    }
+
+    #[test]
+    fn god_ray_intensity_peaks_at_dawn_and_dusk() {
+        // At dawn (6h) and dusk (18h), angle is 0 or PI so sin = 0 and intensity = 0.6.
+        let dawn = god_ray_intensity(6.0);
+        let dusk = god_ray_intensity(18.0);
+        assert!((dawn - 0.6).abs() < 1e-5, "dawn should peak at 0.6, got {}", dawn);
+        assert!((dusk - 0.6).abs() < 1e-5, "dusk should peak at 0.6, got {}", dusk);
+    }
+
+    #[test]
+    fn god_ray_intensity_smooth_between_extremes() {
+        // At 9h (mid-morning), elevation is sin(3/24 * TAU) = sin(PI/4) ~ 0.707,
+        // so intensity = (1 - 0.707) * 0.6 ~ 0.176.
+        let mid = god_ray_intensity(9.0);
+        assert!(mid > 0.0 && mid < 0.6, "mid-morning should be between 0 and 0.6, got {}", mid);
     }
 }

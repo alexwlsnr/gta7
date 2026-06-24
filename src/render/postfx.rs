@@ -50,6 +50,17 @@ pub struct PostFx {
     loc_sky_bottom: i32,
     /// Starfield visibility uniform (`u_starAlpha`): 0 = day, 1 = night.
     loc_star_alpha: i32,
+    /// God ray radial-blur shader (32 samples from the sun's screen position).
+    god_rays_shader: Shader,
+    /// `u_sunScreenPos` uniform location — the sun's projected position in UV space.
+    loc_gr_sun_pos: i32,
+    /// `u_intensity` uniform location — 0 disables the pass, up to 0.6 at dawn/dusk.
+    loc_gr_intensity: i32,
+    /// Cached sun position in screen UV space (0..1, 0..1), set per-frame via `set_god_rays`.
+    sun_screen_pos: Vector2,
+    /// Cached god ray intensity (0..0.6), set per-frame via `set_god_rays`. Values
+    /// below 0.01 short-circuit the shader pass entirely.
+    god_ray_intensity: f32,
 
     width: i32,
     height: i32,
@@ -121,6 +132,12 @@ impl PostFx {
             );
             if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
         };
+        // God rays shader: 32-sample radial blur from the sun's projected screen
+        // position. Loads as a passthrough fallback if the file is missing.
+        let god_rays_shader = {
+            let s = rl.load_shader(thread, None, Some("assets/shaders/god_rays.fs"));
+            if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
+        };
 
         // Cache uniform locations (-1 = not found / inactive).
         let loc_threshold = bright_shader.get_shader_location("u_threshold");
@@ -133,6 +150,8 @@ impl PostFx {
         let loc_sky_top = sky_shader.get_shader_location("u_skyTop");
         let loc_sky_bottom = sky_shader.get_shader_location("u_skyBottom");
         let loc_star_alpha = sky_shader.get_shader_location("u_starAlpha");
+        let loc_gr_sun_pos = god_rays_shader.get_shader_location("u_sunScreenPos");
+        let loc_gr_intensity = god_rays_shader.get_shader_location("u_intensity");
 
         // Default uniform values.
         bright_shader.set_shader_value(loc_threshold, 0.85f32);
@@ -153,6 +172,7 @@ impl PostFx {
             bloom_shader,
             crt_shader,
             sky_shader,
+            god_rays_shader,
             loc_threshold,
             loc_soft_knee,
             loc_blur_direction,
@@ -163,6 +183,10 @@ impl PostFx {
             loc_sky_top,
             loc_sky_bottom,
             loc_star_alpha,
+            loc_gr_sun_pos,
+            loc_gr_intensity,
+            sun_screen_pos: Vector2::new(0.5, 0.5),
+            god_ray_intensity: 0.0,
             width,
             height,
             half_width,
@@ -184,6 +208,16 @@ impl PostFx {
             .set_shader_value(self.loc_sky_bottom, sky_bottom);
         self.sky_shader
             .set_shader_value(self.loc_star_alpha, star_alpha);
+    }
+
+    /// Set the god-ray inputs for the current frame: the sun's screen UV position
+    /// (0..1, 0..1) and the intensity scalar (0..0.6). Call this BEFORE `process()`
+    /// so the values are cached when the god ray pass runs. The pass is skipped
+    /// entirely when intensity is below 0.01, so this is effectively free at
+    /// noon and night.
+    pub fn set_god_rays(&mut self, sun_pos: Vector2, intensity: f32) {
+        self.sun_screen_pos = sun_pos;
+        self.god_ray_intensity = intensity;
     }
 
     /// Borrow the sky shader for `begin_shader_mode` around the sky dome draw.
@@ -306,6 +340,49 @@ impl PostFx {
         unsafe {
             raylib::ffi::rlActiveTextureSlot(1);
             raylib::ffi::rlDisableTexture();
+        }
+        // Pass 4b: God rays (output_fbo -> scene_fbo temp -> output_fbo).
+        // Runs only when the configured intensity clears 0.01 (i.e. at dawn/dusk);
+        // otherwise output_fbo is left untouched. Uses scene_fbo as a scratch
+        // target for the same reason as the CRT pass — `begin_texture_mode`
+        // mutably borrows its target, so we cannot read and write output_fbo
+        // in the same pass.
+        if self.god_ray_intensity > 0.01 {
+            self.god_rays_shader
+                .set_shader_value(self.loc_gr_sun_pos, self.sun_screen_pos);
+            self.god_rays_shader
+                .set_shader_value(self.loc_gr_intensity, self.god_ray_intensity);
+            // Snapshot output_fbo's texture so the borrow ends before we
+            // mutably borrow scene_fbo (same pattern as the CRT pass).
+            let output_tex = self.output_fbo.texture().clone();
+            {
+                let mut st = rl.begin_texture_mode(thread, &mut self.scene_fbo);
+                st.clear_background(Color::BLACK);
+                {
+                    let mut gs = st.begin_shader_mode(&mut self.god_rays_shader);
+                    gs.draw_texture_pro(
+                        output_tex,
+                        full_src,
+                        full_dst,
+                        Vector2::zero(),
+                        0.0,
+                        Color::WHITE,
+                    );
+                }
+            }
+            // Blit scene_fbo (god ray result) back to output_fbo without a shader.
+            let scene_tex = self.scene_fbo.texture().clone();
+            {
+                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+                ot.draw_texture_pro(
+                    scene_tex,
+                    full_src,
+                    full_dst,
+                    Vector2::zero(),
+                    0.0,
+                    Color::WHITE,
+                );
+            }
         }
         // Pass 5: CRT post filter (output_fbo -> scene_fbo temp -> output_fbo).
         // `begin_texture_mode` borrows the destination FBO mutably, so we can't

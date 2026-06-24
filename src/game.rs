@@ -1388,6 +1388,21 @@ impl<'a> Game<'a> {
             }
         }
 
+        // --- God Ray Inputs ---
+        // Project the sun's world position to screen UV space for the radial-blur
+        // god ray pass. Must be computed while `rl` is free (after the shadow
+        // pass's texture-mode guard drops, before the scene FBO's borrow) since
+        // `get_world_to_screen` borrows `&self rl` and we need `&mut self.postfx`
+        // to stash the result. Mirrors the sky-uniforms pattern below.
+        let sun_world_pos = crate::config::sun_position(total_hours, player_pos);
+        let sun_screen = rl.get_world_to_screen(sun_world_pos, cam);
+        let sun_uv = Vector2::new(
+            sun_screen.x / rl.get_screen_width() as f32,
+            sun_screen.y / rl.get_screen_height() as f32,
+        );
+        let gr_intensity = crate::config::god_ray_intensity(total_hours);
+        self.postfx.set_god_rays(sun_uv, gr_intensity);
+
         // --- Scene Pass (offscreen FBO) ---
         // Render the 3D world into the PostFx scene render texture. The FBO
         // matches the window size (1280×720), so this is a pure indirection
