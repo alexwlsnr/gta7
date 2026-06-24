@@ -22,6 +22,9 @@ pub struct PostFx {
     bright_shader: Shader,
     blur_shader: Shader,
     bloom_shader: Shader,
+    /// CRT aesthetic pass (chromatic aberration, scanlines, vignette, ACES,
+    /// film grain) — the final post-processing pass before `blit()`.
+    crt_shader: Shader,
 
     // Cached uniform locations. `loc_blur_direction` and `loc_bloom_bloom` are
     // used per-frame; the rest are set once at load and retained for future
@@ -35,6 +38,10 @@ pub struct PostFx {
     loc_bloom_strength: i32,
     /// Sampler location for `texture1` (the bloom buffer) in the composite shader.
     loc_bloom_bloom: i32,
+    /// Per-frame time uniform for the animated film grain in the CRT shader.
+    loc_crt_time: i32,
+    /// Resolution uniform for the CRT scanline spacing.
+    loc_crt_resolution: i32,
 
     width: i32,
     height: i32,
@@ -90,6 +97,10 @@ impl PostFx {
             let s = rl.load_shader(thread, None, Some("assets/shaders/bloom_composite.fs"));
             if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
         };
+        let mut crt_shader = {
+            let s = rl.load_shader(thread, None, Some("assets/shaders/crt_post.fs"));
+            if s.is_shader_valid() { s } else { rl.load_shader(thread, None, None) }
+        };
 
         // Cache uniform locations (-1 = not found / inactive).
         let loc_threshold = bright_shader.get_shader_location("u_threshold");
@@ -97,11 +108,17 @@ impl PostFx {
         let loc_blur_direction = blur_shader.get_shader_location("u_direction");
         let loc_bloom_strength = bloom_shader.get_shader_location("u_bloomStrength");
         let loc_bloom_bloom = bloom_shader.get_shader_location("texture1");
+        let loc_crt_time = crt_shader.get_shader_location("u_time");
+        let loc_crt_resolution = crt_shader.get_shader_location("u_resolution");
 
         // Default uniform values.
         bright_shader.set_shader_value(loc_threshold, 0.85f32);
         bright_shader.set_shader_value(loc_soft_knee, 0.15f32);
         bloom_shader.set_shader_value(loc_bloom_strength, 0.4f32);
+        crt_shader.set_shader_value(
+            loc_crt_resolution,
+            Vector2::new(width as f32, height as f32),
+        );
 
         Self {
             scene_fbo,
@@ -111,11 +128,14 @@ impl PostFx {
             bright_shader,
             blur_shader,
             bloom_shader,
+            crt_shader,
             loc_threshold,
             loc_soft_knee,
             loc_blur_direction,
             loc_bloom_strength,
             loc_bloom_bloom,
+            loc_crt_time,
+            loc_crt_resolution,
             width,
             height,
             half_width,
@@ -226,6 +246,47 @@ impl PostFx {
                     Color::WHITE,
                 );
             }
+        }
+        // Pass 5: CRT post filter (output_fbo -> scene_fbo temp -> output_fbo).
+        // `begin_texture_mode` borrows the destination FBO mutably, so we can't
+        // read and write `output_fbo` in one pass. `scene_fbo` is free after the
+        // bloom composite, so use it as a scratch target, then copy back.
+        self.crt_shader
+            .set_shader_value(self.loc_crt_time, rl.get_time() as f32);
+        self.crt_shader.set_shader_value(
+            self.loc_crt_resolution,
+            Vector2::new(self.width as f32, self.height as f32),
+        );
+        // Snapshot output_fbo's texture so the borrow ends before we mutably
+        // borrow scene_fbo (matches the blur pass pattern).
+        let output_tex = self.output_fbo.texture().clone();
+        {
+            let mut st = rl.begin_texture_mode(thread, &mut self.scene_fbo);
+            st.clear_background(Color::BLACK);
+            {
+                let mut cs = st.begin_shader_mode(&mut self.crt_shader);
+                cs.draw_texture_pro(
+                    output_tex,
+                    full_src,
+                    full_dst,
+                    Vector2::zero(),
+                    0.0,
+                    Color::WHITE,
+                );
+            }
+        }
+        // Blit scene_fbo (CRT result) back to output_fbo without a shader.
+        let scene_tex = self.scene_fbo.texture().clone();
+        {
+            let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+            ot.draw_texture_pro(
+                scene_tex,
+                full_src,
+                full_dst,
+                Vector2::zero(),
+                0.0,
+                Color::WHITE,
+            );
         }
     }
 
