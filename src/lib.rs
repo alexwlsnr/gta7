@@ -18,6 +18,7 @@ pub mod hud;
 pub mod game;
 pub mod sound;
 pub mod sound_tracks;
+pub mod test_scene;
 
 
 
