@@ -1358,33 +1358,37 @@ impl<'a> Game<'a> {
         }
 
         // --- Shadow Pass ---
-        // Render shadow-casting geometry to the shadow map BEFORE the main draw
-        // frame. `begin_texture_mode` and `begin_drawing` both borrow `rl`
-        // mutably, so the shadow pass must complete (RAII drop) before the main
-        // pass begins.
+        // total_hours and player_pos are used by both this pass and the god
+        // ray input block below, so compute them before the gate.
         let total_hours = (self.time * self.cfg.time_scale).rem_euclid(24.0);
         let player_pos = self.player.pos;
-        self.lighting.prepare_shadow(player_pos, total_hours);
-        // Snapshot the shadow camera (a Copy) before borrowing `shadow_map` —
-        // `shadow_camera()` borrows &self.lighting, which would conflict with
-        // the mutable `shadow_map` borrow held by the texture-mode guard below.
-        let shadow_cam = self.lighting.shadow_camera();
-        {
-            let mut dt = rl.begin_texture_mode(thread, &mut self.lighting.shadow_map);
-            dt.clear_background(Color::new(255, 255, 255, 255));
-            let mut d3 = dt.begin_mode3D(shadow_cam);
+        if !self.lighting.disabled.shadows {
+            // Render shadow-casting geometry to the shadow map BEFORE the main draw
+            // frame. `begin_texture_mode` and `begin_drawing` both borrow `rl`
+            // mutably, so the shadow pass must complete (RAII drop) before the main
+            // pass begins.
+            self.lighting.prepare_shadow(player_pos, total_hours);
+            // Snapshot the shadow camera (a Copy) before borrowing `shadow_map` —
+            // `shadow_camera()` borrows &self.lighting, which would conflict with
+            // the mutable `shadow_map` borrow held by the texture-mode guard below.
+            let shadow_cam = self.lighting.shadow_camera();
             {
-                let mut d3s = d3.begin_shader_mode(&mut self.lighting.depth_shader);
-                draw_shadow_casters(
-                    &mut d3s,
-                    &self.city,
-                    &self.assets,
-                    &self.cfg,
-                    &self.vehicles,
-                    &self.peds,
-                    &self.cops,
-                    &self.player,
-                );
+                let mut dt = rl.begin_texture_mode(thread, &mut self.lighting.shadow_map);
+                dt.clear_background(Color::new(255, 255, 255, 255));
+                let mut d3 = dt.begin_mode3D(shadow_cam);
+                {
+                    let mut d3s = d3.begin_shader_mode(&mut self.lighting.depth_shader);
+                    draw_shadow_casters(
+                        &mut d3s,
+                        &self.city,
+                        &self.assets,
+                        &self.cfg,
+                        &self.vehicles,
+                        &self.peds,
+                        &self.cops,
+                        &self.player,
+                    );
+                }
             }
         }
 

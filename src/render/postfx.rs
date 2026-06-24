@@ -9,6 +9,7 @@
 //! `begin_texture_mode`) and must be called BEFORE `begin_drawing`. `blit()`
 //! copies the final output_fbo to the screen inside `begin_drawing`.
 use raylib::prelude::*;
+use crate::postfx_mask::PostFxMask;
 
 pub struct PostFx {
     pub scene_fbo: RenderTexture2D,
@@ -107,6 +108,10 @@ pub struct PostFx {
     height: i32,
     half_width: i32,
     half_height: i32,
+    /// Per-pass disable flags set by the test harness. When a flag is set,
+    /// the corresponding pass is skipped; bloom-off additionally performs
+    /// a verbatim scene-fbo -> output-fbo copy so output_fbo stays valid.
+    pub disabled: PostFxMask,
 }
 
 impl PostFx {
@@ -274,7 +279,16 @@ impl PostFx {
             height,
             half_width,
             half_height,
+            disabled: PostFxMask::none(),
         }
+    }
+
+    /// Replace the per-pass disable mask. The test harness calls this once
+    /// after construction to apply the `--disable` CSV from the CLI; from
+    /// that point on `process()` gates each pass behind the corresponding
+    /// flag for the lifetime of the `PostFx`.
+    pub fn set_disabled(&mut self, mask: PostFxMask) {
+        self.disabled = mask;
     }
 
     /// Set the per-frame sky dome uniforms: gradient top/bottom colors and the
@@ -345,6 +359,24 @@ impl PostFx {
         );
         let half_dst = Rectangle::new(0.0, 0.0, self.half_width as f32, self.half_height as f32);
 
+        if self.disabled.bloom {
+            // Bloom off: copy scene_fbo verbatim into output_fbo so the
+            // downstream passes (SSR / god rays / CRT) and the final blit
+            // always have a valid texture to read.
+            let scene_tex = self.scene_fbo.texture().clone();
+            {
+                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+                ot.clear_background(Color::BLACK);
+                ot.draw_texture_pro(
+                    scene_tex,
+                    full_src,
+                    full_dst,
+                    Vector2::zero(),
+                    0.0,
+                    Color::WHITE,
+                );
+            }
+        } else {
         // Pass 1: Bright extract (scene_fbo -> bright_fbo, downsampled to half-res).
         {
             let mut bt = rl.begin_texture_mode(thread, &mut self.bright_fbo);
@@ -448,13 +480,14 @@ impl PostFx {
             raylib::ffi::rlActiveTextureSlot(1);
             raylib::ffi::rlDisableTexture();
         }
+        }
         // Pass 4b: SSR (output_fbo -> ssr_fbo -> output_fbo).
         // 24-step screen-space vertical march that mixes a small fraction of
         // the colors above each pixel back into the base, weighted by
         // `ssr_wetness`. Skipped entirely when wetness is below 0.01 so the
         // day-time path is a no-op. Uses `ssr_fbo` as the scratch target so
         // we don't conflict with the CRT pass's `scene_fbo` scratch usage.
-        if self.ssr_wetness > 0.01 {
+        if !self.disabled.ssr && self.ssr_wetness > 0.01 {
             // Snapshot output_fbo's texture so the borrow ends before we
             // mutably borrow ssr_fbo (same pattern as the god_rays pass).
             let output_tex = self.output_fbo.texture().clone();
@@ -493,7 +526,7 @@ impl PostFx {
         // target for the same reason as the CRT pass — `begin_texture_mode`
         // mutably borrows its target, so we cannot read and write output_fbo
         // in the same pass.
-        if self.god_ray_intensity > 0.01 {
+        if !self.disabled.god_rays && self.god_ray_intensity > 0.01 {
             self.god_rays_shader
                 .set_shader_value(self.loc_gr_sun_pos, self.sun_screen_pos);
             self.god_rays_shader
@@ -534,22 +567,39 @@ impl PostFx {
         // `begin_texture_mode` borrows the destination FBO mutably, so we can't
         // read and write `output_fbo` in one pass. `scene_fbo` is free after the
         // bloom composite, so use it as a scratch target, then copy back.
-        self.crt_shader
-            .set_shader_value(self.loc_crt_time, rl.get_time() as f32);
-        self.crt_shader.set_shader_value(
-            self.loc_crt_resolution,
-            Vector2::new(self.width as f32, self.height as f32),
-        );
-        // Snapshot output_fbo's texture so the borrow ends before we mutably
-        // borrow scene_fbo (matches the blur pass pattern).
-        let output_tex = self.output_fbo.texture().clone();
-        {
-            let mut st = rl.begin_texture_mode(thread, &mut self.scene_fbo);
-            st.clear_background(Color::BLACK);
+        // Skipped entirely when `disabled.crt` is set; output_fbo then keeps
+        // whatever the previous pass (bloom / SSR / god rays) wrote.
+        if !self.disabled.crt {
+            self.crt_shader
+                .set_shader_value(self.loc_crt_time, rl.get_time() as f32);
+            self.crt_shader.set_shader_value(
+                self.loc_crt_resolution,
+                Vector2::new(self.width as f32, self.height as f32),
+            );
+            // Snapshot output_fbo's texture so the borrow ends before we mutably
+            // borrow scene_fbo (matches the blur pass pattern).
+            let output_tex = self.output_fbo.texture().clone();
             {
-                let mut cs = st.begin_shader_mode(&mut self.crt_shader);
-                cs.draw_texture_pro(
-                    output_tex,
+                let mut st = rl.begin_texture_mode(thread, &mut self.scene_fbo);
+                st.clear_background(Color::BLACK);
+                {
+                    let mut cs = st.begin_shader_mode(&mut self.crt_shader);
+                    cs.draw_texture_pro(
+                        output_tex,
+                        full_src,
+                        full_dst,
+                        Vector2::zero(),
+                        0.0,
+                        Color::WHITE,
+                    );
+                }
+            }
+            // Blit scene_fbo (CRT result) back to output_fbo without a shader.
+            let scene_tex = self.scene_fbo.texture().clone();
+            {
+                let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
+                ot.draw_texture_pro(
+                    scene_tex,
                     full_src,
                     full_dst,
                     Vector2::zero(),
@@ -557,19 +607,6 @@ impl PostFx {
                     Color::WHITE,
                 );
             }
-        }
-        // Blit scene_fbo (CRT result) back to output_fbo without a shader.
-        let scene_tex = self.scene_fbo.texture().clone();
-        {
-            let mut ot = rl.begin_texture_mode(thread, &mut self.output_fbo);
-            ot.draw_texture_pro(
-                scene_tex,
-                full_src,
-                full_dst,
-                Vector2::zero(),
-                0.0,
-                Color::WHITE,
-            );
         }
     }
 

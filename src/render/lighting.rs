@@ -3,6 +3,7 @@ use raylib::consts::CameraProjection;
 use raylib::ffi::Vector3;
 use raylib::prelude::*;
 use crate::config::{sun_color, sun_direction, sun_position};
+use crate::postfx_mask::PostFxMask;
 
 #[derive(Clone, Copy, Debug)]
 pub struct PointLight {
@@ -33,8 +34,12 @@ pub struct LightingSystem {
     loc_specular: i32,
     // Cached uniform locations for depth shader.
     pub loc_depth_mvp: i32,
-    // Current light space matrix (updated each frame).
     light_space: Matrix,
+    /// Per-pass disable flags set by the test harness. Only `shadows` is
+    /// consulted by the lighting system today (to skip the shadow pass
+    /// in `Game::render`); the rest of the bits live here so callers
+    /// can read or replace the whole mask in one shot.
+    pub disabled: PostFxMask,
 }
 
 impl LightingSystem {
@@ -118,7 +123,15 @@ impl LightingSystem {
             loc_specular,
             loc_depth_mvp,
             light_space: Matrix::identity(),
+            disabled: PostFxMask::none(),
         }
+    }
+
+    /// Replace the per-pass disable mask. The test harness calls this once
+    /// after construction to apply the `--disable` CSV from the CLI.
+    /// `Game::render` consults `disabled.shadows` to skip the shadow pass.
+    pub fn set_disabled(&mut self, mask: PostFxMask) {
+        self.disabled = mask;
     }
 
     /// Set the lit shader on model materials so draw_model/draw_model_ex use it.
