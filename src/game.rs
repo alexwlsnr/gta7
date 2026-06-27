@@ -120,6 +120,11 @@ pub struct Game<'a> {
 }
 
 impl<'a> Game<'a> {
+    /// True when the test harness has requested that `self.time` not advance.
+    pub fn is_frozen(&self) -> bool {
+        self.args.as_ref().is_some_and(|a| a.freeze_time)
+    }
+
     pub fn new(rl: &mut RaylibHandle, thread: &RaylibThread, cfg: Config, audio: &'a RaylibAudio) -> Self {
         let mut city = City::generate(&cfg);
         let mut assets = Assets::load(rl, thread, &cfg);
@@ -266,7 +271,7 @@ impl<'a> Game<'a> {
     pub fn update(&mut self, input: &mut Input, dt: f32) {
         match self.screen_state {
             ScreenState::Title => {
-                if !self.args.as_ref().map_or(false, |a| a.freeze_time) {
+                if !self.is_frozen() {
                     self.time += dt;
                 }
                 self.fx.step(dt);
@@ -302,7 +307,7 @@ impl<'a> Game<'a> {
                 return;
             }
             ScreenState::Intro => {
-                if !self.args.as_ref().map_or(false, |a| a.freeze_time) {
+                if !self.is_frozen() {
                     self.time += dt;
                 }
                 self.fx.step(dt);
@@ -364,7 +369,7 @@ impl<'a> Game<'a> {
             ScreenState::Playing => {}
         }
 
-        if !self.args.as_ref().map_or(false, |a| a.freeze_time) {
+        if !self.is_frozen() {
             self.time += dt;
         }
         self.fx.step(dt);

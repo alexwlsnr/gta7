@@ -176,7 +176,7 @@ fn interactive_loop(
 
         // P: save a timestamped screenshot.
         if rl.is_key_pressed(KeyboardKey::KEY_P) {
-            take_screenshot(rl, thread, game);
+            take_screenshot(rl, thread);
         }
 
         // Numpad +/- to advance time.
@@ -208,7 +208,7 @@ fn interactive_loop(
     }
 }
 
-fn take_screenshot(rl: &mut raylib::RaylibHandle, thread: &raylib::RaylibThread, _game: &mut Game) {
+fn take_screenshot(rl: &mut raylib::RaylibHandle, thread: &raylib::RaylibThread) {
     use std::time::{SystemTime, UNIX_EPOCH};
     std::fs::create_dir_all("screenshots").ok();
     let stamp = SystemTime::now()

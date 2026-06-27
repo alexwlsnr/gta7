@@ -122,15 +122,11 @@ Same as `night_street` but at dawn with god rays active.
 | Key | Action |
 |---|---|
 | `F1` | Toggle existing debug overlay |
-| `F3` | Toggle bounds drawing (was already there, just documented) |
 | `F5` | Cycle to next scene preset |
 | `F6` | Toggle free-camera vs follow-camera |
-| `F7` | Toggle post-processing pass currently selected by `F8` |
-| `F8` | Cycle which post-FX pass `F7` toggles |
 | `Numpad +` / `Numpad -` | Adjust `time` by ±0.5 hours |
 | `P` | Save screenshot to `screenshots/<timestamp>.png` |
-| `L` | Cycle lighting preset: `Full` / `Day` / `Night` / `None` |
-| `B` | Toggle AABB draw (alias for F3) |
+| `F11` | Toggle fullscreen |
 
 These are added to the existing hotkey block in `src/main.rs`. They're
 no-ops outside test mode.
@@ -162,13 +158,14 @@ no-ops outside test mode.
 
 ### `src/test_scene.rs` (new)
 
-- `pub const SCENES: &[(&str, fn(&mut Game))]` table.
+- `pub const SCENES: &[(&str, fn(&mut Game, &Args))]` table.
 - Preset functions: `scene_headlight_closeup`, `scene_night_street`,
   `scene_dawn_drive`, `scene_parking_lot`.
-- `pub fn apply_scene(game: &mut Game, name: &str)` — looks up by name,
-  errors with a helpful list if unknown.
-- Uses `cfg.test_seed`, `cfg.test_cars`, `cfg.test_peds` for randomized
-  spawns.
+- `pub fn apply_scene(game: &mut Game, args: &Args)` — looks up by
+  `args.scene`. **Lenient on unknown names:** prints a list of available
+  presets to stderr and falls back to `headlight_closeup` so a typo'd
+  `--scene=foo` still produces a usable screenshot rather than aborting.
+- Uses `args.seed`, `args.cars`, `args.peds` for randomized spawns.
 - For deterministic NPC traffic, use the seeded RNG (already exposed in
   `crate::world::city::City`).
 
@@ -189,9 +186,10 @@ no-ops outside test mode.
 
 - Unit test `parse_args` for each flag (use `clap` if it gets complex; otherwise
   hand-rolled).
-- Unit test `PostFxMask::from_csv` (case insensitivity, unknown flags
-  error).
-- Unit test `apply_scene` rejects unknown scene names with a clear error.
+- Unit test `PostFxMask::from_csv` (case insensitivity, all seven fields,
+  aliases, whitespace, unknown tokens are silently dropped).
+- Unit test `SCENES` table contents (documented presets present,
+  fallback target is `headlight_closeup`).
 - Visual: capture screenshots from each preset and review. Stored in
   `screenshots/` (gitignored).
 

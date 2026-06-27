@@ -68,8 +68,6 @@ fn scene_night_street(game: &mut Game, args: &Args) {
         Vector3 { x: 0.0, y: 0.0, z: 0.0 }, 0.0,
         Color::new(255, 20, 147, 255), VehicleKind::Civilian, VehicleVariant::Sedan,
     ));
-    game.player.in_vehicle = Some(0);
-    game.vehicles[0].variant = VehicleVariant::Sedan;
     for _ in 0..args.cars.max(4) {
         spawn_traffic(&game.city, &mut game.vehicles, &mut game.traffic);
     }
@@ -106,4 +104,44 @@ fn scene_parking_lot(game: &mut Game, args: &Args) {
             Vector3 { x: 0.0, y: 8.0, z: 12.0 }, -std::f32::consts::FRAC_PI_2, 0.0,
         );
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The four presets the spec ships. Locking this list guards against
+    /// accidental renames/deletions.
+    #[test]
+    fn scenes_table_lists_documented_presets() {
+        let names: Vec<&str> = SCENES.iter().map(|(n, _)| *n).collect();
+        assert_eq!(
+            names,
+            vec!["headlight_closeup", "night_street", "dawn_drive", "parking_lot"],
+        );
+    }
+
+    /// `apply_scene` falls back to SCENES[0] on unknown names. The fallback
+    /// must always be the deterministic safe default (headlight_closeup) so
+    /// typo'd --scene values don't land in a half-applied state.
+    #[test]
+    fn fallback_target_is_headlight_closeup() {
+        assert_eq!(SCENES[0].0, "headlight_closeup");
+    }
+
+    /// Every entry has a non-null fn pointer. (The compiler already enforces
+    /// this for SCENES as a `const` table; the test documents the contract.)
+    #[test]
+    fn every_scene_has_an_applicator() {
+        for (name, f) in SCENES {
+            assert!(!name.is_empty(), "empty scene name");
+            assert!(!(*f as *const ()).is_null(), "null fn for {name}");
+        }
+    }
+
+    // Note: apply_scene() takes &mut Game, which requires a live
+    // RaylibHandle to construct. The fallback path is covered by the
+    // screenshot-mode integration smoke (see main.rs --screenshot). This
+    // module guards the public SCENES table; per-preset functions are
+    // exercised through the screenshot smoke and the F5 cycle hotkey.
 }

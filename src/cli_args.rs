@@ -104,7 +104,9 @@ where
             pos: Vector3 { x: cams[0], y: cams[1], z: cams[2] },
             yaw: cams[3], pitch: cams[4],
         },
-        _ => {} // leave as default
+        n => eprintln!(
+            "warning: --camera expects 3 or 5 components, got {n}; using default"
+        ),
     }
     args
 }
